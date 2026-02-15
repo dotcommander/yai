@@ -2,9 +2,11 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -281,27 +283,66 @@ func (c *DB) load() error {
 	}
 	defer file.Close() //nolint:errcheck
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	// Be resilient to index corruption:
+	// - skip malformed lines (including a truncated tail entry)
+	// - skip overlong lines without bricking the whole history
+	// The index is append-only and compacted, so tolerating partial writes is
+	// preferable to failing startup.
+	const maxIndexLineBytes = 10 * 1024 * 1024
+	reader := bufio.NewReaderSize(file, 64*1024)
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	for {
+		line, err := reader.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			// Line is longer than the reader buffer; discard until newline.
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = reader.ReadSlice('\n')
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			continue
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("could not read index file: %w", err)
+		}
+		if len(line) == 0 && errors.Is(err, io.EOF) {
+			break
+		}
+
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			continue
+		}
+		if len(trimmed) > maxIndexLineBytes {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 			continue
 		}
 
 		var evt convoEvent
-		if err := json.Unmarshal([]byte(line), &evt); err != nil {
-			return fmt.Errorf("could not parse index event: %w", err)
+		if uerr := json.Unmarshal(trimmed, &evt); uerr != nil {
+			// Truncated tail entries are common in crashy environments.
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			continue
 		}
-		if err := c.applyEvent(&evt); err != nil {
-			return err
+		if aerr := c.applyEvent(&evt); aerr != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			continue
 		}
 		c.ops++
-	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("could not scan index file: %w", err)
+		if errors.Is(err, io.EOF) {
+			break
+		}
 	}
 
 	return nil

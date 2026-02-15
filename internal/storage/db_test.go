@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -183,5 +184,32 @@ func TestDB(t *testing.T) {
 
 		_, err = os.Stat(filepath.Join(dir, indexFileName))
 		require.NoError(t, err)
+	})
+
+	t.Run("tolerates corrupted jsonl index", func(t *testing.T) {
+		dir := t.TempDir()
+
+		api := "openai"
+		model := "gpt-4o"
+		when := time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC)
+		convo := Conversation{ID: testid, Title: "ok", UpdatedAt: when, API: &api, Model: &model}
+		good, err := json.Marshal(convoEvent{Op: "upsert", Conversation: &convo})
+		require.NoError(t, err)
+
+		// Write a valid event, then garbage, then a truncated tail event.
+		indexPath := filepath.Join(dir, indexFileName)
+		content := string(good) + "\n" + "not-json\n" + "{\"op\":\"upsert\"\n"
+		require.NoError(t, os.WriteFile(indexPath, []byte(content), 0o600))
+
+		db, err := Open(dir)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, db.Close())
+		})
+
+		got, err := db.Find(testid[:8])
+		require.NoError(t, err)
+		require.Equal(t, testid, got.ID)
+		require.Equal(t, "ok", got.Title)
 	})
 }
