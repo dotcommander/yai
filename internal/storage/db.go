@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 var (
@@ -47,6 +49,7 @@ func Open(ds string) (*DB, error) {
 
 	c := &DB{
 		indexPath:      filepath.Join(dir, indexFileName),
+		lock:           flock.New(filepath.Join(dir, "index.lock")),
 		conversations:  make(map[string]Conversation),
 		cleanupTempDir: cleanupDir,
 	}
@@ -61,6 +64,7 @@ func Open(ds string) (*DB, error) {
 type DB struct {
 	mu             sync.RWMutex
 	indexPath      string
+	lock           *flock.Flock
 	conversations  map[string]Conversation
 	ops            int
 	cleanupTempDir string
@@ -261,6 +265,13 @@ func resolveStoreDir(ds string) (dir string, cleanupDir string, err error) {
 }
 
 func (c *DB) load() error {
+	if c.lock != nil {
+		if err := c.lock.Lock(); err != nil {
+			return fmt.Errorf("could not lock index file: %w", err)
+		}
+		defer func() { _ = c.lock.Unlock() }()
+	}
+
 	file, err := os.Open(c.indexPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -319,22 +330,30 @@ func (c *DB) applyEvent(evt *convoEvent) error {
 }
 
 func (c *DB) appendEventLocked(evt convoEvent) error {
+	if c.lock != nil {
+		if err := c.lock.Lock(); err != nil {
+			return fmt.Errorf("lock index: %w", err)
+		}
+		defer func() { _ = c.lock.Unlock() }()
+	}
+
 	file, err := os.OpenFile(c.indexPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open index: %w", err)
 	}
+	defer func() { _ = file.Close() }()
 
-	enc := json.NewEncoder(file)
-	if err := enc.Encode(evt); err != nil {
+	bts, err := json.Marshal(evt)
+	if err != nil {
+		return fmt.Errorf("marshal index event: %w", err)
+	}
+	bts = append(bts, '\n')
+	if _, err := file.Write(bts); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("write index event: %w", err)
 	}
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
 		return fmt.Errorf("sync index: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close index: %w", err)
 	}
 
 	c.ops++
@@ -352,6 +371,13 @@ func (c *DB) compactIfNeededLocked() error {
 }
 
 func (c *DB) compactLocked() error {
+	if c.lock != nil {
+		if err := c.lock.Lock(); err != nil {
+			return fmt.Errorf("lock index: %w", err)
+		}
+		defer func() { _ = c.lock.Unlock() }()
+	}
+
 	items := make([]Conversation, 0, len(c.conversations))
 	for _, convo := range c.conversations {
 		items = append(items, convo)
@@ -389,9 +415,19 @@ func (c *DB) compactLocked() error {
 	if err := os.Rename(tmpPath, c.indexPath); err != nil {
 		return fmt.Errorf("replace index with compacted version: %w", err)
 	}
+	_ = syncDir(filepath.Dir(c.indexPath))
 
 	c.ops = len(c.conversations)
 	return nil
+}
+
+func syncDir(path string) error {
+	d, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
 }
 
 func sortConversationsByUpdatedAtDesc(convos []Conversation) {
