@@ -32,6 +32,7 @@ func initRootFlags(cmd *cobra.Command, cfg *config.Config) {
 	flags.BoolVarP(&cfg.ShowHelp, "help", "h", false, present.StdoutStyles().FlagDesc.Render(helpText["help"]))
 	flags.BoolVarP(&cfg.Version, "version", "v", false, present.StdoutStyles().FlagDesc.Render(helpText["version"]))
 	flags.IntVar(&cfg.MaxRetries, "max-retries", cfg.MaxRetries, present.StdoutStyles().FlagDesc.Render(helpText["max-retries"]))
+	flags.Var(newDurationFlag(cfg.RequestTimeout, &cfg.RequestTimeout), "request-timeout", present.StdoutStyles().FlagDesc.Render(helpText["request-timeout"]))
 	flags.BoolVar(&cfg.NoLimit, "no-limit", cfg.NoLimit, present.StdoutStyles().FlagDesc.Render(helpText["no-limit"]))
 	flags.Int64Var(&cfg.MaxTokens, "max-tokens", cfg.MaxTokens, present.StdoutStyles().FlagDesc.Render(helpText["max-tokens"]))
 	flags.IntVar(&cfg.WordWrap, "word-wrap", cfg.WordWrap, present.StdoutStyles().FlagDesc.Render(helpText["word-wrap"]))
@@ -52,6 +53,8 @@ func initRootFlags(cmd *cobra.Command, cfg *config.Config) {
 	flags.BoolVar(&cfg.MCPList, "mcp-list", false, present.StdoutStyles().FlagDesc.Render(helpText["mcp-list"]))
 	flags.BoolVar(&cfg.MCPListTools, "mcp-list-tools", false, present.StdoutStyles().FlagDesc.Render(helpText["mcp-list-tools"]))
 	flags.StringArrayVar(&cfg.MCPDisable, "mcp-disable", nil, present.StdoutStyles().FlagDesc.Render(helpText["mcp-disable"]))
+	flags.BoolVar(&cfg.MCPAllowNonTTY, "mcp-allow-non-tty", cfg.MCPAllowNonTTY, present.StdoutStyles().FlagDesc.Render(helpText["mcp-allow-non-tty"]))
+	flags.BoolVar(&cfg.MCPNoInheritEnv, "mcp-no-inherit-env", cfg.MCPNoInheritEnv, present.StdoutStyles().FlagDesc.Render(helpText["mcp-no-inherit-env"]))
 	flags.Lookup("prompt").NoOptDefVal = "-1"
 	flags.SortFlags = false
 

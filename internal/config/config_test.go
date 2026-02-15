@@ -50,8 +50,7 @@ func TestMergeRolesFromDir(t *testing.T) {
 		require.NoError(t, MergeRolesFromDir(&cfg))
 		require.Equal(t, []string{"file://" + reviewer}, cfg.Roles["reviewer"])
 		require.Equal(t, []string{"file://" + single}, cfg.Roles["single"])
-		_, exists := cfg.Roles["ignore"]
-		require.False(t, exists)
+		require.Equal(t, []string{"ignored"}, cfg.Roles["ignore"])
 	})
 
 	t.Run("config roles override directory roles", func(t *testing.T) {
@@ -89,7 +88,6 @@ func TestMergeRolesFromDir(t *testing.T) {
 		require.NoError(t, MergeRolesFromDir(&cfg))
 		require.Equal(t, []string{"file://" + stoicPath}, cfg.Roles["philosophy/greek/stoic"])
 		require.Equal(t, []string{"file://" + helpersPath}, cfg.Roles["helpers/shell"])
-		_, exists := cfg.Roles["philosophy/greek/ignore"]
-		require.False(t, exists)
+		require.Equal(t, []string{"ignored"}, cfg.Roles["philosophy/greek/ignore"])
 	})
 }

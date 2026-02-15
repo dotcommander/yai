@@ -22,6 +22,11 @@ max-completion-tokens: 0
 max-retries: 3
 word-wrap: 80
 
+# Maximum wall time for a single provider request/stream.
+# - set to 0 to use the default
+# - set to a negative duration (e.g. -1s) to disable
+request-timeout: 5m
+
 # Sampling
 temp: -1
 topp: -1
@@ -53,4 +58,6 @@ apis:
         max-input-chars: 0
 
 mcp-timeout: 15s
+mcp-allow-non-tty: false
+mcp-no-inherit-env: false
 mcp-servers: {}

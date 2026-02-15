@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	glamour "github.com/charmbracelet/glamour/styles"
@@ -47,6 +49,9 @@ func NewRootCmd(build BuildInfo, cfg config.Config, cfgErr error) *cobra.Command
 			if rt.cfgErr != nil {
 				return rt.cfgErr
 			}
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			cmd.SetContext(ctx)
 			return rt.runGenerate(cmd, args)
 		},
 	}

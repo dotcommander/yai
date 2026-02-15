@@ -116,12 +116,15 @@ type Settings struct {
 	System              string              `yaml:"system"`
 	Role                string              `yaml:"role" env:"ROLE"`
 	Theme               string              `yaml:"theme" env:"THEME"`
-	User                string              `yaml:"user" env:"YAI_USER"`
+	User                string              `yaml:"user" env:"USER"`
 	Roles               map[string][]string `yaml:"roles"`
 
-	MCPServers map[string]MCPServerConfig `yaml:"mcp-servers"`
-	MCPDisable []string                   `yaml:"mcp-disable" env:"MCP_DISABLE"`
-	MCPTimeout time.Duration              `yaml:"mcp-timeout" env:"MCP_TIMEOUT"`
+	MCPServers      map[string]MCPServerConfig `yaml:"mcp-servers"`
+	MCPDisable      []string                   `yaml:"mcp-disable" env:"MCP_DISABLE"`
+	MCPTimeout      time.Duration              `yaml:"mcp-timeout" env:"MCP_TIMEOUT"`
+	MCPAllowNonTTY  bool                       `yaml:"mcp-allow-non-tty" env:"MCP_ALLOW_NON_TTY"`
+	MCPNoInheritEnv bool                       `yaml:"mcp-no-inherit-env" env:"MCP_NO_INHERIT_ENV"`
+	RequestTimeout  time.Duration              `yaml:"request-timeout" env:"REQUEST_TIMEOUT"`
 }
 
 // Runtime holds CLI/runtime-only options that should not be loaded from the
@@ -231,6 +234,11 @@ func Ensure() (Config, error) {
 	if c.MCPTimeout == 0 {
 		c.MCPTimeout = Default().MCPTimeout
 	}
+	if c.RequestTimeout < 0 {
+		c.RequestTimeout = 0
+	} else if c.RequestTimeout == 0 {
+		c.RequestTimeout = Default().RequestTimeout
+	}
 
 	return c, nil
 }
@@ -274,7 +282,7 @@ func readRolesFromDir(dir string) (map[string][]string, error) {
 		}
 
 		ext := stdstrings.ToLower(filepath.Ext(path))
-		if ext != ".md" {
+		if ext != ".md" && ext != ".yml" && ext != ".yaml" {
 			return nil
 		}
 
@@ -339,15 +347,33 @@ func WriteConfigFile(path string) error {
 func createConfigFile(path string) error {
 	tmpl := template.Must(template.New("config").Parse(configTemplate))
 
-	f, err := os.Create(path)
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "yai.yml.*")
 	if err != nil {
 		return errs.Error{Err: err, Reason: "Could not create configuration file."}
 	}
-	defer func() { _ = f.Close() }()
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
 
 	m := struct{ Config Config }{Config: Default()}
-	if err := tmpl.Execute(f, m); err != nil {
+	if err := tmpl.Execute(tmp, m); err != nil {
 		return errs.Error{Err: err, Reason: "Could not render template."}
+	}
+	if err := tmp.Sync(); err != nil {
+		return errs.Error{Err: err, Reason: "Could not write configuration file."}
+	}
+	if err := tmp.Close(); err != nil {
+		return errs.Error{Err: err, Reason: "Could not write configuration file."}
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return errs.Error{Err: err, Reason: "Could not write configuration file."}
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }
@@ -361,7 +387,8 @@ func Default() Config {
 				"markdown": defaultMarkdownFormatText,
 				"json":     defaultJSONFormatText,
 			},
-			MCPTimeout: 15 * time.Second,
+			MCPTimeout:     15 * time.Second,
+			RequestTimeout: 5 * time.Minute,
 		},
 	}
 }

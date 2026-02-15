@@ -3,19 +3,23 @@ package agent
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/go-shellwords"
+	mmcp "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/dotcommander/yai/internal/config"
 	"github.com/dotcommander/yai/internal/errs"
 	"github.com/dotcommander/yai/internal/fantasybridge"
 	"github.com/dotcommander/yai/internal/mcp"
+	"github.com/dotcommander/yai/internal/present"
 	"github.com/dotcommander/yai/internal/proto"
 	"github.com/dotcommander/yai/internal/storage/cache"
 	"github.com/dotcommander/yai/internal/stream"
@@ -70,11 +74,20 @@ func (s *Service) Stream(ctx context.Context, prompt string) (StreamStart, error
 		mod.MaxChars = cfg.MaxInputChars
 	}
 
-	toolsCtx, cancel := context.WithTimeout(ctx, cfg.MCPTimeout)
-	tools, err := s.mcp.Tools(toolsCtx)
-	cancel()
-	if err != nil {
-		return StreamStart{}, fmt.Errorf("mcp tools: %w", err)
+	toolsEnabled := true
+	if !cfg.MCPAllowNonTTY && !present.IsInputTTY() {
+		toolsEnabled = false
+	}
+
+	var tools map[string][]mmcp.Tool
+	if toolsEnabled {
+		toolsCtx, cancel := context.WithTimeout(ctx, cfg.MCPTimeout)
+		var err error
+		tools, err = s.mcp.Tools(toolsCtx)
+		cancel()
+		if err != nil {
+			return StreamStart{}, fmt.Errorf("mcp tools: %w", err)
+		}
 	}
 
 	messages, err := s.buildMessages(prompt, mod)
@@ -108,11 +121,13 @@ func (s *Service) Stream(ctx context.Context, prompt string) (StreamStart, error
 		TopK:        topK,
 		Stop:        cfg.Stop,
 		Tools:       tools,
-		ToolCaller: func(name string, data []byte) (string, error) {
+	}
+	if toolsEnabled {
+		request.ToolCaller = func(name string, data []byte) (string, error) {
 			callCtx, cancel := context.WithTimeout(ctx, cfg.MCPTimeout)
 			defer cancel()
 			return s.mcp.CallTool(callCtx, name, data)
-		},
+		}
 	}
 
 	// o1 models do not accept max_tokens.
@@ -289,7 +304,19 @@ func ApplyProxyConfig(httpProxy string, providerCfg *fantasybridge.Config) error
 	if err != nil {
 		return errs.Error{Err: err, Reason: "There was an error parsing your proxy URL."}
 	}
-	providerCfg.HTTPClient = &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return errs.Error{Err: fmt.Errorf("default transport is not *http.Transport"), Reason: "Could not configure proxy."}
+	}
+	tr := base.Clone()
+	tr.Proxy = http.ProxyURL(proxyURL)
+	// Ensure we have sensible transport timeouts even when upstream SDKs don't.
+	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	tr.TLSHandshakeTimeout = 10 * time.Second
+	tr.ResponseHeaderTimeout = 30 * time.Second
+	tr.IdleConnTimeout = 90 * time.Second
+	tr.ExpectContinueTimeout = 1 * time.Second
+	providerCfg.HTTPClient = &http.Client{Transport: tr}
 	return nil
 }
 

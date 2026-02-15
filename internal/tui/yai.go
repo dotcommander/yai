@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -37,6 +38,7 @@ const (
 
 // Yai is the Bubble Tea model that manages reading stdin and streaming LLM output.
 type Yai struct {
+	// Output is populated at the end of a run for non-raw output printing.
 	Output string
 	Input  string
 	Styles present.Styles
@@ -59,6 +61,11 @@ type Yai struct {
 
 	content      []string
 	contentMutex *sync.Mutex
+
+	outputBuf       bytes.Buffer
+	outputTruncated bool
+	activeStream    stream.Stream
+	activeCancel    context.CancelFunc
 
 	renderScheduled bool
 	dirtyOutput     bool
@@ -147,6 +154,7 @@ func (m *Yai) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case completionOutput:
 		if msg.stream == nil {
+			m.Output = m.outputBuf.String()
 			if !present.IsOutputTTY() || m.Config.Raw {
 				m.flushBufferedContent()
 			}
@@ -190,13 +198,14 @@ func (m *Yai) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.glamViewport.Width = m.width
 		m.glamViewport.Height = m.height
-		if m.shouldRenderFormattedOutput() && m.Output != "" {
+		if m.shouldRenderFormattedOutput() && m.outputBuf.Len() > 0 {
 			m.renderFormattedOutput()
 		}
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
+			m.closeActiveStream()
 			m.state = doneState
 			return m, m.quit
 		}
@@ -287,14 +296,23 @@ func (m *Yai) startCompletionCmd(content string) tea.Cmd {
 		if m.agent == nil {
 			return errs.Error{Reason: "Agent is not available"}
 		}
-		res, err := m.agent.Stream(m.ctx, content)
+		m.closeActiveStream()
+		ctx := m.ctx
+		if m.Config.RequestTimeout > 0 {
+			cctx, cancel := context.WithTimeout(m.ctx, m.Config.RequestTimeout)
+			ctx = cctx
+			m.activeCancel = cancel
+		}
+		res, err := m.agent.Stream(ctx, content)
 		if err != nil {
+			m.closeActiveStream()
 			var e errs.Error
 			if errors.As(err, &e) {
 				return e
 			}
 			return errs.Error{Err: err}
 		}
+		m.activeStream = res.Stream
 		m.messages = res.Messages
 		mod := res.Model
 
@@ -330,6 +348,7 @@ func (m *Yai) receiveCompletionStreamCmd(msg completionOutput) tea.Cmd {
 
 		// stream is done, check for errors
 		if err := msg.stream.Err(); err != nil {
+			m.closeActiveStream()
 			return msg.errh(err)
 		}
 
@@ -349,6 +368,7 @@ func (m *Yai) receiveCompletionStreamCmd(msg completionOutput) tea.Cmd {
 		}
 		if len(results) == 0 {
 			m.messages = msg.stream.Messages()
+			m.closeActiveStream()
 			return completionOutput{errh: msg.errh}
 		}
 		return toolMsg
@@ -357,10 +377,17 @@ func (m *Yai) receiveCompletionStreamCmd(msg completionOutput) tea.Cmd {
 
 func (m *Yai) readStdinCmd() tea.Msg {
 	if !present.IsInputTTY() {
-		reader := bufio.NewReader(os.Stdin)
+		reader := io.Reader(bufio.NewReader(os.Stdin))
+		if !m.Config.NoLimit && m.Config.MaxInputChars > 0 {
+			// Read at most MaxInputChars bytes (+1 sentinel) so we never OOM on huge pipes.
+			reader = io.LimitReader(reader, m.Config.MaxInputChars+1)
+		}
 		stdinBytes, err := io.ReadAll(reader)
 		if err != nil {
 			return errs.Error{Err: err, Reason: "Unable to read stdin."}
+		}
+		if !m.Config.NoLimit && m.Config.MaxInputChars > 0 && int64(len(stdinBytes)) > m.Config.MaxInputChars {
+			stdinBytes = stdinBytes[:m.Config.MaxInputChars]
 		}
 
 		return completionInput{increaseIndent(string(stdinBytes))}
@@ -370,13 +397,47 @@ func (m *Yai) readStdinCmd() tea.Msg {
 
 const tabWidth = 4
 
+const maxRetainedOutputBytes = 2 * 1024 * 1024
+
+func (m *Yai) closeActiveStream() {
+	if m.activeStream != nil {
+		_ = m.activeStream.Close()
+		m.activeStream = nil
+	}
+	if m.activeCancel != nil {
+		m.activeCancel()
+		m.activeCancel = nil
+	}
+}
+
+func (m *Yai) outputStringForRender() string {
+	if m.outputBuf.Len() == 0 {
+		return ""
+	}
+	out := m.outputBuf.String()
+	if m.outputTruncated {
+		return "[output truncated]\n\n" + out
+	}
+	return out
+}
+
 func (m *Yai) appendToOutput(s string) {
-	m.Output += s
 	if !present.IsOutputTTY() || m.Config.Raw {
 		m.contentMutex.Lock()
 		m.content = append(m.content, s)
 		m.contentMutex.Unlock()
 		return
+	}
+
+	_, _ = m.outputBuf.WriteString(s)
+	if m.outputBuf.Len() > maxRetainedOutputBytes {
+		b := m.outputBuf.Bytes()
+		if len(b) > maxRetainedOutputBytes {
+			keep := append([]byte(nil), b[len(b)-maxRetainedOutputBytes:]...)
+			m.outputBuf.Reset()
+			_, _ = m.outputBuf.Write(keep)
+			m.outputTruncated = true
+		}
 	}
 	m.dirtyOutput = true
 }
@@ -404,7 +465,7 @@ func (m *Yai) renderOutputCmd() tea.Cmd {
 func (m *Yai) renderFormattedOutput() {
 	wasAtBottom := m.glamViewport.ScrollPercent() == 1.0
 	oldHeight := m.glamHeight
-	m.glamOutput, _ = m.glam.Render(m.Output)
+	m.glamOutput, _ = m.glam.Render(m.outputStringForRender())
 	m.glamOutput = strings.TrimRightFunc(m.glamOutput, unicode.IsSpace)
 	m.glamOutput = strings.ReplaceAll(m.glamOutput, "\t", strings.Repeat(" ", tabWidth))
 	m.glamHeight = lipgloss.Height(m.glamOutput)

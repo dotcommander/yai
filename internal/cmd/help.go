@@ -25,6 +25,7 @@ var helpText = map[string]string{
 	"help":                  "Show help and exit",
 	"version":               "Show version and exit",
 	"max-retries":           "Maximum number of times to retry API calls",
+	"request-timeout":       "Maximum wall time for a single provider request/stream (0 uses default; negative disables)",
 	"no-limit":              "Turn off the client-side limit on the size of the input into the model",
 	"word-wrap":             "Wrap formatted output at specific width (default is 80)",
 	"max-tokens":            "Maximum number of tokens in response",
@@ -54,4 +55,6 @@ var helpText = map[string]string{
 	"mcp-list":              "List all available MCP servers",
 	"mcp-list-tools":        "List all available tools from enabled MCP servers",
 	"mcp-timeout":           "Timeout for MCP server calls, defaults to 15 seconds",
+	"mcp-allow-non-tty":     "Allow MCP tool exposure/execution when STDIN is not a TTY (disabled by default)",
+	"mcp-no-inherit-env":    "Do not inherit the full process environment for stdio MCP servers",
 }

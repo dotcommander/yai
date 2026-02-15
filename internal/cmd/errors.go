@@ -16,7 +16,7 @@ func handleError(err error) {
 
 	// exhaust stdin
 	if !present.IsInputTTY() {
-		_, _ = io.ReadAll(os.Stdin)
+		_, _ = io.Copy(io.Discard, os.Stdin)
 	}
 
 	format := "\n%s\n\n"

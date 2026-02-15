@@ -1,12 +1,14 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,14 +23,29 @@ import (
 // For markdown files loaded via file://, YAML frontmatter is stripped.
 func LoadMsg(msg string) (string, error) {
 	if strings.HasPrefix(msg, "https://") || strings.HasPrefix(msg, "http://") {
-		resp, err := http.Get(msg) //nolint:gosec,noctx
+		const maxRemoteMsgBytes = 2 * 1024 * 1024
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, msg, nil)
+		if err != nil {
+			return "", fmt.Errorf("fetch role message: %w", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return "", fmt.Errorf("fetch role message: %w", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
-		bts, err := io.ReadAll(resp.Body)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			bts, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+			return "", fmt.Errorf("fetch role message: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bts)))
+		}
+		bts, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteMsgBytes))
 		if err != nil {
 			return "", fmt.Errorf("read role message: %w", err)
+		}
+		if len(bts) >= maxRemoteMsgBytes {
+			return "", fmt.Errorf("read role message: response too large (>%d bytes)", maxRemoteMsgBytes)
 		}
 		return string(bts), nil
 	}

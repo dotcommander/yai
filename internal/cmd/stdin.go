@@ -11,5 +11,5 @@ func drainStdin() {
 	if present.IsInputTTY() {
 		return
 	}
-	_, _ = io.ReadAll(os.Stdin)
+	_, _ = io.Copy(io.Discard, os.Stdin)
 }

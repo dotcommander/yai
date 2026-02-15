@@ -59,7 +59,7 @@ func (s *Service) Tools(ctx context.Context) (map[string][]mcp.Tool, error) {
 	result := map[string][]mcp.Tool{}
 	for sname, server := range s.EnabledServers() {
 		wg.Go(func() error {
-			serverTools, err := toolsFor(ctx, sname, server)
+			serverTools, err := toolsFor(ctx, s.cfg, sname, server)
 			if errors.Is(err, context.DeadlineExceeded) {
 				return errs.Error{
 					Err:    fmt.Errorf("timeout while listing tools for %q - make sure the configuration is correct. If your server requires a docker container, make sure it's running", sname),
@@ -95,7 +95,7 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 	if !s.IsEnabled(sname) {
 		return "", fmt.Errorf("mcp: server is disabled: %q", sname)
 	}
-	cli, err := initClient(ctx, server)
+	cli, err := initClient(ctx, s.cfg, server)
 	if err != nil {
 		return "", fmt.Errorf("mcp: %w", err)
 	}
@@ -132,15 +132,19 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 	return sb.String(), nil
 }
 
-func initClient(ctx context.Context, server config.MCPServerConfig) (*client.Client, error) {
+func initClient(ctx context.Context, cfg *config.Config, server config.MCPServerConfig) (*client.Client, error) {
 	var cli *client.Client
 	var err error
 
 	switch server.Type {
 	case "", "stdio":
+		env := server.Env
+		if cfg != nil && !cfg.MCPNoInheritEnv {
+			env = append(os.Environ(), server.Env...)
+		}
 		cli, err = client.NewStdioMCPClient(
 			server.Command,
-			append(os.Environ(), server.Env...),
+			env,
 			server.Args...,
 		)
 	case "sse":
@@ -168,8 +172,8 @@ func initClient(ctx context.Context, server config.MCPServerConfig) (*client.Cli
 	return cli, nil
 }
 
-func toolsFor(ctx context.Context, name string, server config.MCPServerConfig) ([]mcp.Tool, error) {
-	cli, err := initClient(ctx, server)
+func toolsFor(ctx context.Context, cfg *config.Config, name string, server config.MCPServerConfig) ([]mcp.Tool, error) {
+	cli, err := initClient(ctx, cfg, server)
 	if err != nil {
 		return nil, fmt.Errorf("could not setup %s: %w", name, err)
 	}
