@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dotcommander/yai/internal/config"
 )
 
 func BenchmarkStreamingRenderComparison(b *testing.B) {
@@ -15,7 +16,7 @@ func BenchmarkStreamingRenderComparison(b *testing.B) {
 	b.Run("legacy_render_every_chunk", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			m := newBenchmarkModsForRender()
+			m := newBenchmarkYaiForRender()
 			for _, chunk := range chunks {
 				m.Output += chunk
 				m.renderFormattedOutput()
@@ -27,7 +28,7 @@ func BenchmarkStreamingRenderComparison(b *testing.B) {
 		b.ReportAllocs()
 		const batchSize = 12
 		for i := 0; i < b.N; i++ {
-			m := newBenchmarkModsForRender()
+			m := newBenchmarkYaiForRender()
 			for j, chunk := range chunks {
 				m.Output += chunk
 				if (j+1)%batchSize == 0 {
@@ -41,9 +42,10 @@ func BenchmarkStreamingRenderComparison(b *testing.B) {
 	})
 }
 
-func newBenchmarkModsForRender() *Mods {
+func newBenchmarkYaiForRender() *Yai {
 	r := lipgloss.NewRenderer(io.Discard)
-	m := newMods(context.Background(), r, &Config{WordWrap: 100}, nil, nil)
+	m := NewYai(context.Background(), r, &config.Config{Settings: config.Settings{WordWrap: 100}}, nil)
+
 	m.width = 120
 	m.height = 40
 	m.glamViewport.Width = m.width

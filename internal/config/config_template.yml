@@ -1,0 +1,56 @@
+# yai settings
+#
+# This file is created automatically if it doesn't exist.
+# You can edit it via: yai --settings
+
+default-api: openai
+default-model: gpt-4
+
+format: false
+format-as: markdown
+format-text:
+  markdown: '{{ index .Config.FormatText "markdown" }}'
+  json: '{{ index .Config.FormatText "json" }}'
+
+raw: false
+quiet: false
+
+# Limits
+max-input-chars: 0
+max-tokens: 0
+max-completion-tokens: 0
+max-retries: 3
+word-wrap: 80
+
+# Sampling
+temp: -1
+topp: -1
+topk: -1
+stop: []
+
+# Misc
+no-limit: false
+no-cache: false
+include-prompt: 0
+include-prompt-args: false
+fanciness: 12
+status-text: "Generating"
+
+http-proxy: ""
+cache-path: ""
+system: ""
+role: ""
+
+apis:
+  openai:
+    api-key-env: OPENAI_API_KEY
+    base-url: ""
+    user: ""
+    models:
+      gpt-4:
+        aliases: ["gpt4"]
+        fallback: ""
+        max-input-chars: 0
+
+mcp-timeout: 15s
+mcp-servers: {}
