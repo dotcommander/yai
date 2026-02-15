@@ -90,6 +90,26 @@ type Stream struct {
 	pendingWarnings  []string
 }
 
+const (
+	maxToolCallsPerStep    = 32
+	maxToolCallInputBytes  = 256 * 1024
+	internalWarningToolCap = "too many tool calls in a single step; extra calls were ignored"
+)
+
+func (s *Stream) warnOnce(key, text string) {
+	if s.warningSeen == nil {
+		s.warningSeen = map[string]struct{}{}
+	}
+	if key == "" {
+		key = text
+	}
+	if _, exists := s.warningSeen[key]; exists {
+		return
+	}
+	s.warningSeen[key] = struct{}{}
+	s.pendingWarnings = append(s.pendingWarnings, text)
+}
+
 // Next implements stream.Stream.
 func (s *Stream) Next() bool {
 	// Avoid blocking under the mutex.
@@ -309,7 +329,15 @@ func (s *Stream) consumePart(part fantasy.StreamPart) {
 		if part.ProviderExecuted {
 			return
 		}
+		if len(s.stepToolCalls) >= maxToolCallsPerStep {
+			s.warnOnce("internal:toolcall-cap", internalWarningToolCap)
+			return
+		}
 		if _, exists := s.stepToolCallSeen[part.ID]; exists {
+			return
+		}
+		if len(part.ToolCallInput) > maxToolCallInputBytes {
+			s.warnOnce("internal:toolcall-input-too-large", "tool call input too large; call skipped")
 			return
 		}
 		s.stepToolCallSeen[part.ID] = struct{}{}

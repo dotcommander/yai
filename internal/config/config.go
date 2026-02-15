@@ -234,9 +234,10 @@ func Ensure() (Config, error) {
 	if c.MCPTimeout == 0 {
 		c.MCPTimeout = Default().MCPTimeout
 	}
-	if c.RequestTimeout < 0 {
-		c.RequestTimeout = 0
-	} else if c.RequestTimeout == 0 {
+	// request-timeout:
+	// - 0 means use default
+	// - negative means disable (handled by callers by only applying when > 0)
+	if c.RequestTimeout == 0 {
 		c.RequestTimeout = Default().RequestTimeout
 	}
 

@@ -70,6 +70,7 @@ type Yai struct {
 	renderScheduled bool
 	dirtyOutput     bool
 	stopWarned      bool
+	mcpNonTTYWarned bool
 
 	ctx context.Context
 }
@@ -320,6 +321,10 @@ func (m *Yai) startCompletionCmd(content string) tea.Cmd {
 		if len(cfg.Stop) > 0 && !cfg.Quiet && !m.stopWarned {
 			fmt.Fprintln(os.Stderr, m.Styles.Comment.Render("Warning: stop sequences are currently ignored by the Fantasy bridge (current Fantasy Call API has no stop field)."))
 			m.stopWarned = true
+		}
+		if !cfg.Quiet && !cfg.MCPAllowNonTTY && !present.IsInputTTY() && len(cfg.MCPServers) > 0 && !m.mcpNonTTYWarned {
+			fmt.Fprintln(os.Stderr, m.Styles.Comment.Render("Warning: MCP tools are disabled for piped/non-interactive input by default. Use --mcp-allow-non-tty to enable."))
+			m.mcpNonTTYWarned = true
 		}
 
 		return m.receiveCompletionStreamCmd(completionOutput{
