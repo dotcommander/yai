@@ -8,14 +8,6 @@ import (
 	"sync"
 
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/anthropic"
-	"charm.land/fantasy/providers/azure"
-	"charm.land/fantasy/providers/bedrock"
-	fgoogle "charm.land/fantasy/providers/google"
-	fopenai "charm.land/fantasy/providers/openai"
-	fopenaicompat "charm.land/fantasy/providers/openaicompat"
-	"charm.land/fantasy/providers/openrouter"
-	"charm.land/fantasy/providers/vercel"
 	"github.com/dotcommander/yai/internal/proto"
 	"github.com/dotcommander/yai/internal/stream"
 )
@@ -52,112 +44,6 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	return &Client{provider: provider, config: cfg}, nil
-}
-
-func newProvider(cfg Config) (fantasy.Provider, error) {
-	switch cfg.API {
-	case apiOpenAI:
-		opts := []fopenai.Option{fopenai.WithAPIKey(cfg.APIKey)}
-		if cfg.BaseURL != "" {
-			opts = append(opts, fopenai.WithBaseURL(cfg.BaseURL))
-		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, fopenai.WithHTTPClient(cfg.HTTPClient))
-		}
-		provider, err := fopenai.New(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("new fantasy openai provider: %w", err)
-		}
-		return provider, nil
-	case apiAnthropic:
-		opts := []anthropic.Option{anthropic.WithAPIKey(cfg.APIKey)}
-		if cfg.BaseURL != "" {
-			opts = append(opts, anthropic.WithBaseURL(strings.TrimSuffix(cfg.BaseURL, "/v1")))
-		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, anthropic.WithHTTPClient(cfg.HTTPClient))
-		}
-		provider, err := anthropic.New(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("new fantasy anthropic provider: %w", err)
-		}
-		return provider, nil
-	case apiGoogle:
-		opts := []fgoogle.Option{fgoogle.WithGeminiAPIKey(cfg.APIKey)}
-		if cfg.BaseURL != "" {
-			opts = append(opts, fgoogle.WithBaseURL(cfg.BaseURL))
-		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, fgoogle.WithHTTPClient(cfg.HTTPClient))
-		}
-		provider, err := fgoogle.New(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("new fantasy google provider: %w", err)
-		}
-		return provider, nil
-	case apiAzure, apiAzureAD:
-		opts := []azure.Option{azure.WithAPIKey(cfg.APIKey), azure.WithBaseURL(cfg.BaseURL)}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, azure.WithHTTPClient(cfg.HTTPClient))
-		}
-		provider, err := azure.New(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("new fantasy azure provider: %w", err)
-		}
-		return provider, nil
-	case "openrouter":
-		opts := []openrouter.Option{openrouter.WithAPIKey(cfg.APIKey)}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, openrouter.WithHTTPClient(cfg.HTTPClient))
-		}
-		provider, err := openrouter.New(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("new fantasy openrouter provider: %w", err)
-		}
-		return provider, nil
-	case "vercel":
-		opts := []vercel.Option{vercel.WithAPIKey(cfg.APIKey)}
-		if cfg.BaseURL != "" {
-			opts = append(opts, vercel.WithBaseURL(cfg.BaseURL))
-		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, vercel.WithHTTPClient(cfg.HTTPClient))
-		}
-		provider, err := vercel.New(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("new fantasy vercel provider: %w", err)
-		}
-		return provider, nil
-	case "bedrock":
-		opts := []bedrock.Option{}
-		if cfg.APIKey != "" {
-			opts = append(opts, bedrock.WithAPIKey(cfg.APIKey))
-		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, bedrock.WithHTTPClient(cfg.HTTPClient))
-		}
-		provider, err := bedrock.New(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("new fantasy bedrock provider: %w", err)
-		}
-		return provider, nil
-	default:
-		opts := []fopenaicompat.Option{fopenaicompat.WithName(cfg.API)}
-		if cfg.APIKey != "" {
-			opts = append(opts, fopenaicompat.WithAPIKey(cfg.APIKey))
-		}
-		if cfg.BaseURL != "" {
-			opts = append(opts, fopenaicompat.WithBaseURL(cfg.BaseURL))
-		}
-		if cfg.HTTPClient != nil {
-			opts = append(opts, fopenaicompat.WithHTTPClient(cfg.HTTPClient))
-		}
-		provider, err := fopenaicompat.New(opts...)
-		if err != nil {
-			return nil, fmt.Errorf("new fantasy openai-compatible provider: %w", err)
-		}
-		return provider, nil
-	}
 }
 
 // Request implements stream.Client.
@@ -206,29 +92,43 @@ type Stream struct {
 
 // Next implements stream.Stream.
 func (s *Stream) Next() bool {
+	// Avoid blocking under the mutex.
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.err != nil {
+		s.mu.Unlock()
 		return false
 	}
-
 	if s.stepDone {
 		if err := s.startStep(); err != nil {
 			s.err = err
+			s.mu.Unlock()
 			return false
 		}
 	}
+	partCh := s.partCh
+	s.mu.Unlock()
 
-	part, ok := <-s.partCh
-	if !ok {
-		s.finalizeStep()
+	select {
+	case <-s.ctx.Done():
+		s.mu.Lock()
+		if s.err == nil {
+			s.err = s.ctx.Err()
+		}
+		s.mu.Unlock()
 		return false
+	case part, ok := <-partCh:
+		if !ok {
+			s.mu.Lock()
+			s.finalizeStep()
+			s.mu.Unlock()
+			return false
+		}
+		s.mu.Lock()
+		s.last = part
+		s.consumePart(part)
+		s.mu.Unlock()
+		return true
 	}
-
-	s.last = part
-	s.consumePart(part)
-	return true
 }
 
 // Current implements stream.Stream.
@@ -287,6 +187,29 @@ func (s *Stream) Messages() []proto.Message {
 func (s *Stream) CallTools() []proto.ToolCallStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.request.ToolCaller == nil {
+		statuses := make([]proto.ToolCallStatus, 0, len(s.stepToolCalls))
+		for _, call := range s.stepToolCalls {
+			msg := proto.Message{
+				Role:    proto.RoleTool,
+				Content: "tool execution is disabled",
+				ToolCalls: []proto.ToolCall{{
+					ID:      call.ID,
+					IsError: true,
+					Function: proto.Function{
+						Name:      call.Function.Name,
+						Arguments: call.Function.Arguments,
+					},
+				}},
+			}
+			s.messages = append(s.messages, msg)
+			statuses = append(statuses, proto.ToolCallStatus{Name: call.Function.Name, Err: fmt.Errorf("tool execution is disabled")})
+		}
+		s.stepToolCalls = nil
+		s.stepToolCallSeen = map[string]struct{}{}
+		return statuses
+	}
 
 	statuses := make([]proto.ToolCallStatus, 0, len(s.stepToolCalls))
 	for _, call := range s.stepToolCalls {
@@ -361,41 +284,7 @@ func (s *Stream) buildCall() fantasy.Call {
 		ProviderOptions: fantasy.ProviderOptions{},
 	}
 
-	openAIOpts := &fopenai.ProviderOptions{}
-	hasOpenAIOpts := false
-
-	if s.request.User != "" {
-		user := s.request.User
-		switch s.api {
-		case apiOpenAI, apiAzure, apiAzureAD:
-			openAIOpts.User = &user
-			hasOpenAIOpts = true
-		case apiAnthropic, apiGoogle, "openrouter", "vercel", "bedrock":
-			// no-op
-		default:
-			call.ProviderOptions[fopenaicompat.Name] = &fopenaicompat.ProviderOptions{User: &user}
-		}
-	}
-
-	if s.request.MaxCompletionTokens != nil {
-		switch s.api {
-		case apiOpenAI, apiAzure, apiAzureAD:
-			openAIOpts.MaxCompletionTokens = s.request.MaxCompletionTokens
-			hasOpenAIOpts = true
-		}
-	}
-
-	if hasOpenAIOpts {
-		call.ProviderOptions[fopenai.Name] = openAIOpts
-	}
-
-	if s.api == apiGoogle && s.config.ThinkingBudget > 0 {
-		call.ProviderOptions[fgoogle.Name] = &fgoogle.ProviderOptions{
-			ThinkingConfig: &fgoogle.ThinkingConfig{
-				ThinkingBudget: fantasy.Opt(int64(s.config.ThinkingBudget)),
-			},
-		}
-	}
+	applyProviderOptions(&call, s.api, s.config, s.request)
 
 	return call
 }
