@@ -19,7 +19,7 @@ go test -v -cover -timeout=30s ./... # CI-style
 golangci-lint run                  # lint (config in .golangci.yml)
 ```
 
-The built binary is `./yai` (listed in .gitignore as `yai`), symlinked to `~/go/bin/yai` for PATH access.
+The built binary is `./yai` (listed in .gitignore as `yai`), symlinked to `$GOBIN/yai` or `$HOME/go/bin/yai` for PATH access.
 
 ## Architecture
 
@@ -91,11 +91,7 @@ The `internal/proto` package defines the shared `Message`, `Request`, `Chunk`, a
 - Conversation metadata index is stored as JSONL at `~/.config/yai/history/conversations/index.jsonl`.
 - Conversation payload files are sharded by 2-char ID prefix under `~/.config/yai/history/conversations/<prefix>/<id>.json`.
 - Legacy flat payload files at `~/.config/yai/history/conversations/<id>.json` are still readable/deletable for migration compatibility.
-- models.dev provider/model sync is configured locally with:
-  - script: `~/.config/yai/bin/models-dev-refresh.sh`
-  - launch agent: `~/Library/LaunchAgents/dev.yai.modelsdev-refresh.plist`
-  - interval: every 12 hours (`StartInterval=43200`)
-  - outputs: `~/.config/yai/cache/models.dev.api.json` and `~/.config/yai/cache/models.dev.providers-models.json`
+- models.dev provider/model sync is configured locally with script at `~/.config/yai/bin/models-dev-refresh.sh`, launch agent at `$HOME/Library/LaunchAgents/dev.yai.modelsdev-refresh.plist`, running every 12 hours (`StartInterval=43200`), outputting to `~/.config/yai/cache/models.dev.api.json` and `~/.config/yai/cache/models.dev.providers-models.json`.
 - Fantasy routing covers OpenAI-compatible APIs plus native providers for `anthropic`, `google`, `azure`, `azure-ad`, `openrouter`, `vercel`, and `bedrock`; `cohere` and `ollama` use `openaicompat` routing.
 - Fantasy bridge maps Google `thinking-budget` via provider options.
 - Fantasy bridge forwards `request.User` via provider options for Fantasy-routed OpenAI (`openai`/`azure`) and OpenAI-compatible APIs.
@@ -103,6 +99,7 @@ The `internal/proto` package defines the shared `Message`, `Request`, `Chunk`, a
 - `stop` is still present in yai config/request, but the current Fantasy `Call` API (v0.8.1) has no direct stop-sequences field, so stop sequences are not currently forwarded by the bridge.
 - When `stop` is configured and `quiet` is false, yai prints a runtime warning to stderr once per run to make the no-op behavior explicit.
 - Fantasy stream `warnings` events are now surfaced to users (stderr, non-quiet) once per unique message via bridge warning dedupe + `DrainWarnings()`.
+- Agent request assembly now strips `temp`/`topp`/`topk` for reasoning model names (`gpt-5*`, `o1*`, `o3*`, `o4*`) to avoid unsupported-setting warnings and empty-turn behavior in chat.
 - Fantasy `ProviderExecuted` tool calls are skipped by yai MCP execution to avoid duplicate local tool invocation.
 - Provider retry fallback now uses Fantasy-native `ProviderError.IsRetryable()` and `ErrorTitleForStatusCode(...)` instead of custom 500/default branching.
 - HTTP 429 handling now also goes through the same Fantasy retryability path (no special-case branch), with reason text derived from `ErrorTitleForStatusCode(...)`.
@@ -111,5 +108,6 @@ The `internal/proto` package defines the shared `Message`, `Request`, `Chunk`, a
 - Retry wait timing now uses Fantasy `RetryWithExponentialBackoffRespectingRetryHeaders` (single-step) for provider errors so `retry-after` headers are honored.
 - Current `charm.land/fantasy` version is v0.8.1; provider set is `anthropic`, `azure`, `bedrock`, `google`, `openai`, `openaicompat`, `openrouter`, `vercel`; `cohere` and `ollama` use `openaicompat` routing.
 - Version is injected via ldflags (`-X main.Version`, `-X main.CommitSHA`) in CI/release builds. Local `go build` derives version from Go's embedded VCS info (git tag + commit + dirty state). The fallback chain is: ldflags → `debug.ReadBuildInfo().Main.Version` → `dev-<sha>[-dirty]`.
-- Local dev binary is symlinked: `~/go/bin/yai` → `/Users/vampire/go/src/yai/yai`. After `go build -o ./yai .`, the PATH binary is updated automatically.
+- Local dev binary is symlinked: `$GOBIN/yai` (or `$HOME/go/bin/yai`) → `<project-root>/yai`. After `go build -o ./yai .`, the PATH binary is updated automatically.
+- User runs yai in Ghostty; prioritize terminal-compatibility for chat UI behavior (stable footer, predictable redraw/scroll behavior).
 - `yai upgrade` runs `go install github.com/dotcommander/yai@latest` to upgrade in-place.
