@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -11,17 +10,16 @@ import (
 	"github.com/dotcommander/yai/internal/errs"
 	"github.com/dotcommander/yai/internal/present"
 	"github.com/dotcommander/yai/internal/storage"
-	"github.com/dotcommander/yai/internal/storage/cache"
 )
 
 func listConversations(cfg *config.Config, raw bool) error {
-	db, err := storage.Open(filepath.Join(cfg.CachePath, "conversations"))
+	store, err := openConversationStore(cfg.CachePath)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Could not open database."}
+		return errs.Wrap(err, "Could not open conversation store.")
 	}
-	defer db.Close() //nolint:errcheck
+	defer store.Close() //nolint:errcheck
 
-	conversations := db.List()
+	conversations := store.DB.List()
 	if len(conversations) == 0 {
 		fmt.Fprintln(os.Stderr, "No conversations found.")
 		return nil
@@ -36,40 +34,49 @@ func listConversations(cfg *config.Config, raw bool) error {
 }
 
 func deleteConversations(cfg *config.Config, targets []string) error {
-	convoCache, err := cache.NewConversations(cfg.CachePath)
+	store, err := openConversationStore(cfg.CachePath)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't delete conversation."}
+		return errs.Wrap(err, "Couldn't delete conversation.")
 	}
-	db, err := storage.Open(filepath.Join(cfg.CachePath, "conversations"))
-	if err != nil {
-		return errs.Error{Err: err, Reason: "Could not open database."}
-	}
-	defer db.Close() //nolint:errcheck
+	defer store.Close() //nolint:errcheck
 
 	for _, del := range targets {
-		convo, err := db.Find(del)
+		convo, err := store.DB.Find(del)
 		if err != nil {
-			return errs.Error{Err: err, Reason: "Couldn't find conversation to delete."}
+			return errs.Wrap(err, "Couldn't find conversation to delete.")
 		}
-		if err := deleteConversationByID(cfg, db, convoCache, convo.ID); err != nil {
+		if err := deleteConversationByID(cfg, store, convo.ID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func deleteConversationByID(cfg *config.Config, store *conversationStore, id string) error {
+	if err := store.DB.Delete(id); err != nil {
+		return fmt.Errorf("delete conversation index: %w", err)
+	}
+	if err := store.Cache.Delete(id); err != nil {
+		return fmt.Errorf("delete conversation payload: %w", err)
+	}
+	if !cfg.Quiet {
+		fmt.Fprintln(os.Stderr, "Conversation deleted:", id[:storage.SHA1MinLen])
+	}
+	return nil
+}
+
 func deleteConversationsOlderThan(cfg *config.Config, olderThanDuration string) error {
 	if cfg.DeleteOlderThan == 0 {
-		return errs.Error{Err: errs.UserErrorf("missing --delete-older-than"), Reason: "Could not delete old conversations."}
+		return errs.Wrap(errs.UserErrorf("missing --delete-older-than"), "Could not delete old conversations.")
 	}
 
-	db, err := storage.Open(filepath.Join(cfg.CachePath, "conversations"))
+	store, err := openConversationStore(cfg.CachePath)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Could not open database."}
+		return errs.Wrap(err, "Could not open conversation store.")
 	}
-	defer db.Close() //nolint:errcheck
+	defer store.Close() //nolint:errcheck
 
-	conversations := db.ListOlderThan(cfg.DeleteOlderThan)
+	conversations := store.DB.ListOlderThan(cfg.DeleteOlderThan)
 	if len(conversations) == 0 {
 		if !cfg.Quiet {
 			fmt.Fprintln(os.Stderr, "No conversations found.")
@@ -95,7 +102,7 @@ func deleteConversationsOlderThan(cfg *config.Config, olderThanDuration string) 
 				Description(fmt.Sprintf("This will delete all the %d conversations listed above.", len(conversations))).
 				Value(&confirm),
 		); err != nil {
-			return errs.Error{Err: err, Reason: "Couldn't delete old conversations."}
+			return errs.Wrap(err, "Couldn't delete old conversations.")
 		}
 		if !confirm {
 			//nolint:wrapcheck // user-facing abort
@@ -103,12 +110,8 @@ func deleteConversationsOlderThan(cfg *config.Config, olderThanDuration string) 
 		}
 	}
 
-	convoCache, err := cache.NewConversations(cfg.CachePath)
-	if err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't delete conversation."}
-	}
 	for _, c := range conversations {
-		if err := deleteConversationByID(cfg, db, convoCache, c.ID); err != nil {
+		if err := deleteConversationByID(cfg, store, c.ID); err != nil {
 			return err
 		}
 	}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/dotcommander/yai/internal/config"
@@ -11,10 +12,35 @@ import (
 	"github.com/dotcommander/yai/internal/proto"
 	"github.com/dotcommander/yai/internal/storage"
 	"github.com/dotcommander/yai/internal/storage/cache"
-	"github.com/dotcommander/yai/internal/tui"
 )
 
-func saveConversation(cfg *config.Config, db *storage.DB, convoCache *cache.Conversations, yai *tui.Yai) error {
+// conversationStore bundles the DB index and payload cache that together
+// form a conversation store. Most cmd functions need both; this avoids
+// repeating the open-and-check boilerplate at every call site.
+type conversationStore struct {
+	DB    *storage.DB
+	Cache *cache.Conversations
+}
+
+// openConversationStore opens both the metadata DB and the payload cache.
+func openConversationStore(cachePath string) (*conversationStore, error) {
+	convoCache, err := cache.NewConversations(cachePath)
+	if err != nil {
+		return nil, fmt.Errorf("open conversation cache: %w", err)
+	}
+	db, err := storage.Open(filepath.Join(cachePath, "conversations"))
+	if err != nil {
+		return nil, fmt.Errorf("open conversation database: %w", err)
+	}
+	return &conversationStore{DB: db, Cache: convoCache}, nil
+}
+
+// Close releases the underlying DB resources.
+func (s *conversationStore) Close() error {
+	return s.DB.Close()
+}
+
+func saveConversation(cfg *config.Config, store *conversationStore, msgs []proto.Message) error {
 	if cfg.NoCache {
 		if !cfg.Quiet {
 			fmt.Fprintf(
@@ -30,7 +56,6 @@ func saveConversation(cfg *config.Config, db *storage.DB, convoCache *cache.Conv
 	id := cfg.CacheWriteToID
 	title := strings.TrimSpace(cfg.CacheWriteToTitle)
 
-	msgs := yai.Messages()
 	if storage.SHA1Regexp.MatchString(title) || title == "" {
 		title = firstLine(lastPrompt(msgs))
 	}
@@ -41,12 +66,12 @@ func saveConversation(cfg *config.Config, db *storage.DB, convoCache *cache.Conv
 		present.StderrStyles().InlineCode.Render("--no-cache"),
 		present.StderrStyles().InlineCode.Render("NO_CACHE"),
 	)
-	if err := convoCache.Write(id, &msgs); err != nil {
-		return errs.Error{Err: err, Reason: errReason}
+	if err := store.Cache.Write(id, &msgs); err != nil {
+		return errs.Wrap(err, errReason)
 	}
-	if err := db.Save(id, title, cfg.API, cfg.Model); err != nil {
-		_ = convoCache.Delete(id)
-		return errs.Error{Err: err, Reason: errReason}
+	if err := store.DB.Save(id, title, cfg.API, cfg.Model); err != nil {
+		_ = store.Cache.Delete(id)
+		return errs.Wrap(err, errReason)
 	}
 
 	if !cfg.Quiet {
