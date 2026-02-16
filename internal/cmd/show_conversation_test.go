@@ -3,13 +3,11 @@ package cmd
 import (
 	"io"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/dotcommander/yai/internal/config"
 	"github.com/dotcommander/yai/internal/proto"
 	"github.com/dotcommander/yai/internal/storage"
-	"github.com/dotcommander/yai/internal/storage/cache"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,17 +31,10 @@ func captureStdout(tb testing.TB, fn func()) string {
 }
 
 func TestShowConversation_Headless(t *testing.T) {
-	tmp := t.TempDir()
+	store, tmpDir := newTestConversationStore(t)
 
 	cfg := config.Config{}
-	cfg.CachePath = tmp
-
-	convoCache, err := cache.NewConversations(cfg.CachePath)
-	require.NoError(t, err)
-
-	db, err := storage.Open(filepath.Join(cfg.CachePath, "conversations"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	cfg.CachePath = tmpDir
 
 	msgs1 := []proto.Message{
 		{Role: proto.RoleUser, Content: "first"},
@@ -55,12 +46,12 @@ func TestShowConversation_Headless(t *testing.T) {
 	}
 
 	id1 := storage.NewConversationID()
-	require.NoError(t, convoCache.Write(id1, &msgs1))
-	require.NoError(t, db.Save(id1, "title-1", "openai", "gpt-4"))
+	require.NoError(t, store.Cache.Write(id1, &msgs1))
+	require.NoError(t, store.DB.Save(id1, "title-1", "openai", "gpt-4"))
 
 	id2 := storage.NewConversationID()
-	require.NoError(t, convoCache.Write(id2, &msgs2))
-	require.NoError(t, db.Save(id2, "title-2", "openai", "gpt-4"))
+	require.NoError(t, store.Cache.Write(id2, &msgs2))
+	require.NoError(t, store.DB.Save(id2, "title-2", "openai", "gpt-4"))
 
 	t.Run("show by id prefix", func(t *testing.T) {
 		c := cfg

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/dotcommander/yai/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,4 +54,30 @@ func TestFlagParseError(t *testing.T) {
 			require.Equal(t, tf.in, err.Error())
 		})
 	}
+}
+
+func TestMaxCompletionTokensFlag(t *testing.T) {
+	t.Run("flag is registered and can be parsed", func(t *testing.T) {
+		cfg := config.Config{}
+		cmd := NewRootCmd(BuildInfo{}, cfg, nil)
+
+		err := cmd.ParseFlags([]string{"--max-completion-tokens", "4096"})
+		require.NoError(t, err)
+
+		flag := cmd.Flag("max-completion-tokens")
+		require.NotNil(t, flag)
+		require.Equal(t, "4096", flag.Value.String())
+	})
+
+	t.Run("accepts zero value", func(t *testing.T) {
+		cfg := config.Config{}
+		cmd := NewRootCmd(BuildInfo{}, cfg, nil)
+
+		err := cmd.ParseFlags([]string{"--max-completion-tokens", "0"})
+		require.NoError(t, err)
+
+		flag := cmd.Flag("max-completion-tokens")
+		require.NotNil(t, flag)
+		require.Equal(t, "0", flag.Value.String())
+	})
 }
