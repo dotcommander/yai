@@ -4,60 +4,204 @@
 # You can edit it via: yai --settings
 
 default-api: openai
-default-model: gpt-4
+default-model: gpt-5-mini
 
-format: false
-format-as: markdown
 format-text:
   markdown: '{{ index .Config.FormatText "markdown" }}'
   json: '{{ index .Config.FormatText "json" }}'
 
+mcp-servers: null
+mcp-timeout: 15s
+
+roles:
+  default: []
+
+format: false
+role: default
 raw: false
 quiet: false
 
-# Limits
-max-input-chars: 0
-max-tokens: 0
-max-completion-tokens: 0
-max-retries: 3
-word-wrap: 80
+temp: 1.0
+topp: 1.0
+topk: 50
 
-# Maximum wall time for a single provider request/stream.
-# - set to 0 to use the default
-# - set to a negative duration (e.g. -1s) to disable
-request-timeout: 5m
-
-# Sampling
-temp: -1
-topp: -1
-topk: -1
-stop: []
-
-# Misc
 no-limit: false
-no-cache: false
-include-prompt: 0
+word-wrap: 80
 include-prompt-args: false
-fanciness: 12
-status-text: "Generating"
+include-prompt: 0
 
-http-proxy: ""
-cache-path: ""
-system: ""
-role: ""
+max-retries: 5
+fanciness: 10
+status-text: Generating
+theme: charm
+
+max-input-chars: 12250
+max-completion-tokens: 8192
 
 apis:
   openai:
+    base-url: https://api.openai.com/v1
+    api-key: null
     api-key-env: OPENAI_API_KEY
-    base-url: ""
-    user: ""
     models:
-      gpt-4:
-        aliases: ["gpt4"]
-        fallback: ""
-        max-input-chars: 0
-
-mcp-timeout: 15s
-mcp-allow-non-tty: false
-mcp-no-inherit-env: false
-mcp-servers: {}
+      gpt-5:
+        aliases:
+        - '5'
+        - gpt5
+        - gpt-5-thinking
+        - gpt5-thinking
+        max-input-chars: 794000
+        fallback: gpt-5-mini
+      gpt-5-mini:
+        aliases:
+        - 5mini
+        - gpt5mini
+        max-input-chars: 400000
+        fallback: gpt-5
+      gpt-5-nano:
+        aliases:
+        - 5nano
+        - gpt5nano
+        max-input-chars: 200000
+        fallback: gpt-5-mini
+      gpt-5-codex:
+        aliases:
+        - 5codex
+        - gpt5codex
+        - codex
+        max-input-chars: 400000
+        fallback: gpt-5
+  anthropic:
+    base-url: https://api.anthropic.com/v1
+    api-key: null
+    api-key-env: ANTHROPIC_API_KEY
+    models:
+      claude-3-7-sonnet-latest:
+        aliases:
+        - claude3.7-sonnet
+        - claude-3-7-sonnet
+        - sonnet-3.7
+        max-input-chars: 680000
+      claude-3-5-haiku-20241022:
+        aliases:
+        - claude3.5-haiku
+        - haiku
+        max-input-chars: 680000
+  cohere:
+    base-url: https://api.cohere.com/compatibility/v1
+    api-key: null
+    api-key-env: COHERE_API_KEY
+    models:
+      command-a-03-2025:
+        aliases:
+        - cohere
+        - command-a
+        max-input-chars: 256000
+  google:
+    api-key: null
+    api-key-env: GOOGLE_API_KEY
+    models:
+      gemini-3-flash-preview:
+        aliases:
+        - g3flash
+        - gemini-3-flash
+        - flash-3
+        max-input-chars: 4194304
+      gemini-3-pro-preview:
+        aliases:
+        - g3pro
+        - gemini-3-pro
+        - pro-3
+        max-input-chars: 4194304
+  groq:
+    base-url: https://api.groq.com/openai/v1
+    api-key: null
+    api-key-env: GROQ_API_KEY
+    models:
+      openai/gpt-oss-120b:
+        max-input-chars: 392000
+      moonshotai/kimi-k2-instruct-0905:
+        max-input-chars: 392000
+      meta-llama/llama-4-scout-17b-16e-instruct:
+        aliases:
+        - llama4-scout
+        max-input-chars: 392000
+      meta-llama/llama-4-maverick-17b-128e-instruct:
+        aliases:
+        - llama4
+        - llama4-maverick
+        max-input-chars: 392000
+  cerebras:
+    base-url: https://api.cerebras.ai/v1
+    api-key: null
+    api-key-env: CEREBRAS_API_KEY
+    models:
+      meta-llama/llama-4-maverick-17b-128e-instruct:
+        max-input-chars: 392000
+      zai-glm-4.7:
+        max-input-chars: 392000
+      qwen-3-235b-a22b-instruct-2507:
+        max-input-chars: 392000
+      gpt-oss-120b:
+        max-input-chars: 392000
+  mistral:
+    base-url: https://openrouter.ai/api/v1
+    api-key: null
+    api-key-env: OPENROUTER_API_KEY
+    models:
+      mistralai/mistral-large:
+        aliases:
+        - mistral-large
+        - mistral-large-latest
+        max-input-chars: 384000
+  deepseek:
+    base-url: https://openrouter.ai/api/v1
+    api-key: null
+    api-key-env: OPENROUTER_API_KEY
+    models:
+      deepseek/deepseek-chat:
+        aliases:
+        - chat
+        - deepseek-chat
+        max-input-chars: 384000
+      deepseek-reasoner:
+        aliases:
+        - r1
+        max-input-chars: 384000
+  zai:
+    base-url: https://api.z.ai/api/paas/v4/
+    api-key: null
+    api-key-env: ZAI_API_KEY
+    models:
+      glm-4.7:
+        aliases:
+        - glm47
+        - zai
+        - zai-glm
+        max-input-chars: 620000
+      glm-4.5-air:
+        aliases:
+        - glm45air
+        - zai-air
+        max-input-chars: 620000
+  synthetic:
+    base-url: https://api.synthetic.new/openai/v1
+    api-key: null
+    api-key-env: SYNTHETIC_API_KEY
+    models:
+      hf:moonshotai/Kimi-K2.5:
+        aliases:
+        - kimi-k2.5
+        - k2.5
+        max-input-chars: 800000
+      hf:zai-org/GLM-4.7:
+        aliases:
+        - synthetic
+        - synthetic-glm
+        - glm47-synth
+        max-input-chars: 620000
+      hf:Qwen/Qwen3-235B-A22B-Instruct-2507:
+        aliases:
+        - synthetic-qwen
+        - qwen3-big
+        max-input-chars: 620000

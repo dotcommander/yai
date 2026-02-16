@@ -21,6 +21,9 @@ import (
 //go:embed config_template.yml
 var configTemplate string
 
+//go:embed tldr_role.md
+var tldrRole string
+
 const (
 	defaultMarkdownFormatText = "Format the response as markdown without enclosing backticks."
 	defaultJSONFormatText     = "Format the response as json without enclosing backticks."
@@ -376,7 +379,25 @@ func createConfigFile(path string) error {
 		_ = d.Sync()
 		_ = d.Close()
 	}
+
+	// Install starter roles alongside config.
+	installStarterRoles(dir)
+
 	return nil
+}
+
+// installStarterRoles writes bundled role files into the roles/ directory
+// next to the config file. Existing files are never overwritten.
+func installStarterRoles(configDir string) {
+	rolesDir := filepath.Join(configDir, "roles")
+	if err := os.MkdirAll(rolesDir, 0o700); err != nil {
+		return
+	}
+	dest := filepath.Join(rolesDir, "tldr.md")
+	if _, err := os.Stat(dest); err == nil {
+		return // already exists
+	}
+	_ = os.WriteFile(dest, []byte(tldrRole), 0o600)
 }
 
 // Default returns the default configuration values.
