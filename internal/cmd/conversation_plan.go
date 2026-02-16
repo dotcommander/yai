@@ -29,7 +29,7 @@ func planConversation(cfg *config.Config, db *storage.DB) (conversationPlan, err
 	if readID != "" || continueLast || cfg.ShowLast {
 		found, err := findReadConversation(cfg, db, readID)
 		if err != nil {
-			return conversationPlan{}, errs.Error{Err: err, Reason: "Could not find the conversation."}
+			return conversationPlan{}, errs.Wrap(err, "Could not find the conversation.")
 		}
 		if found != nil {
 			readID = found.ID

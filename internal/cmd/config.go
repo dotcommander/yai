@@ -61,16 +61,15 @@ func editSettings(cfg *config.Config) error {
 	appName := filepath.Base(os.Args[0])
 	c, err := editor.Cmd(appName, cfg.SettingsPath)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Could not edit your settings file."}
+		return errs.Wrap(err, "Could not edit your settings file.")
 	}
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
-		return errs.Error{Err: err, Reason: fmt.Sprintf(
-			"Missing %s.",
+		return errs.Wrapf(err, "Missing %s.",
 			present.StderrStyles().InlineCode.Render("$EDITOR"),
-		)}
+		)
 	}
 
 	if !cfg.Quiet {
@@ -82,28 +81,28 @@ func editSettings(cfg *config.Config) error {
 func resetSettings(cfg *config.Config) error {
 	_, err := os.Stat(cfg.SettingsPath)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't read config file."}
+		return errs.Wrap(err, "Couldn't read config file.")
 	}
 	inputFile, err := os.Open(cfg.SettingsPath)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't open config file."}
+		return errs.Wrap(err, "Couldn't open config file.")
 	}
 	defer inputFile.Close() //nolint:errcheck
 
 	outputFile, err := os.Create(cfg.SettingsPath + ".bak")
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't backup config file."}
+		return errs.Wrap(err, "Couldn't backup config file.")
 	}
 	defer outputFile.Close() //nolint:errcheck
 
 	if _, err := io.Copy(outputFile, inputFile); err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't write config file."}
+		return errs.Wrap(err, "Couldn't write config file.")
 	}
 	if err := os.Remove(cfg.SettingsPath); err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't remove config file."}
+		return errs.Wrap(err, "Couldn't remove config file.")
 	}
 	if err := config.WriteConfigFile(cfg.SettingsPath); err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't write new config file."}
+		return errs.Wrap(err, "Couldn't write new config file.")
 	}
 
 	if !cfg.Quiet {

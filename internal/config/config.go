@@ -183,7 +183,7 @@ func Ensure() (Config, error) {
 	var c Config
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return c, errs.Error{Err: err, Reason: "Could not determine home directory."}
+		return c, errs.Wrap(err, "Could not determine home directory.")
 	}
 
 	sp := filepath.Join(home, ".config", "yai", "yai.yml")
@@ -191,7 +191,7 @@ func Ensure() (Config, error) {
 
 	dir := filepath.Dir(sp)
 	if dirErr := os.MkdirAll(dir, 0o700); dirErr != nil {
-		return c, errs.Error{Err: dirErr, Reason: "Could not create cache directory."}
+		return c, errs.Wrap(dirErr, "Could not create cache directory.")
 	}
 
 	if dirErr := WriteConfigFile(sp); dirErr != nil {
@@ -199,18 +199,18 @@ func Ensure() (Config, error) {
 	}
 	content, err := os.ReadFile(sp)
 	if err != nil {
-		return c, errs.Error{Err: err, Reason: "Could not read settings file."}
+		return c, errs.Wrap(err, "Could not read settings file.")
 	}
 	if err := yaml.Unmarshal(content, &c); err != nil {
-		return c, errs.Error{Err: err, Reason: "Could not parse settings file."}
+		return c, errs.Wrap(err, "Could not parse settings file.")
 	}
 
 	if err := env.ParseWithOptions(&c, env.Options{Prefix: "YAI_"}); err != nil {
-		return c, errs.Error{Err: err, Reason: "Could not parse environment into settings file."}
+		return c, errs.Wrap(err, "Could not parse environment into settings file.")
 	}
 
 	if err := MergeRolesFromDir(&c); err != nil {
-		return c, errs.Error{Err: err, Reason: "Could not load roles from roles directory."}
+		return c, errs.Wrap(err, "Could not load roles from roles directory.")
 	}
 
 	if c.CachePath == "" {
@@ -221,7 +221,7 @@ func Ensure() (Config, error) {
 		filepath.Join(c.CachePath, "conversations"),
 		0o700,
 	); err != nil {
-		return c, errs.Error{Err: err, Reason: "Could not create cache directory."}
+		return c, errs.Wrap(err, "Could not create cache directory.")
 	}
 
 	if c.WordWrap == 0 {
@@ -285,8 +285,7 @@ func readRolesFromDir(dir string) (map[string][]string, error) {
 			return nil
 		}
 
-		ext := stdstrings.ToLower(filepath.Ext(path))
-		if ext != ".md" && ext != ".yml" && ext != ".yaml" {
+		if stdstrings.ToLower(filepath.Ext(path)) != ".md" {
 			return nil
 		}
 
@@ -300,11 +299,7 @@ func readRolesFromDir(dir string) (map[string][]string, error) {
 			return nil
 		}
 
-		setup, setupErr := roleSetupFromFile(path)
-		if setupErr != nil {
-			return fmt.Errorf("role file %q: %w", relPath, setupErr)
-		}
-		roles[roleName] = setup
+		roles[roleName] = []string{"file://" + path}
 		return nil
 	})
 	if err != nil {
@@ -314,36 +309,13 @@ func readRolesFromDir(dir string) (map[string][]string, error) {
 	return roles, nil
 }
 
-func roleSetupFromFile(path string) ([]string, error) {
-	ext := stdstrings.ToLower(filepath.Ext(path))
-	if ext != ".yml" && ext != ".yaml" {
-		return []string{"file://" + path}, nil
-	}
-
-	bts, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read role file %q: %w", path, err)
-	}
-
-	var setup []string
-	if err := yaml.Unmarshal(bts, &setup); err == nil {
-		return setup, nil
-	}
-
-	var single string
-	if err := yaml.Unmarshal(bts, &single); err == nil {
-		return []string{single}, nil
-	}
-
-	return nil, fmt.Errorf("must be a YAML string or string list")
-}
 
 // WriteConfigFile creates the config file at path if it does not exist.
 func WriteConfigFile(path string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return createConfigFile(path)
 	} else if err != nil {
-		return errs.Error{Err: err, Reason: "Could not stat path."}
+		return errs.Wrap(err, "Could not stat path.")
 	}
 	return nil
 }
@@ -354,7 +326,7 @@ func createConfigFile(path string) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "yai.yml.*")
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Could not create configuration file."}
+		return errs.Wrap(err, "Could not create configuration file.")
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -364,16 +336,16 @@ func createConfigFile(path string) error {
 
 	m := struct{ Config Config }{Config: Default()}
 	if err := tmpl.Execute(tmp, m); err != nil {
-		return errs.Error{Err: err, Reason: "Could not render template."}
+		return errs.Wrap(err, "Could not render template.")
 	}
 	if err := tmp.Sync(); err != nil {
-		return errs.Error{Err: err, Reason: "Could not write configuration file."}
+		return errs.Wrap(err, "Could not write configuration file.")
 	}
 	if err := tmp.Close(); err != nil {
-		return errs.Error{Err: err, Reason: "Could not write configuration file."}
+		return errs.Wrap(err, "Could not write configuration file.")
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		return errs.Error{Err: err, Reason: "Could not write configuration file."}
+		return errs.Wrap(err, "Could not write configuration file.")
 	}
 	if d, err := os.Open(dir); err == nil {
 		_ = d.Sync()

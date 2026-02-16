@@ -389,7 +389,7 @@ func (m *Yai) readStdinCmd() tea.Msg {
 		}
 		stdinBytes, err := io.ReadAll(reader)
 		if err != nil {
-			return errs.Error{Err: err, Reason: "Unable to read stdin."}
+			return errs.Wrap(err, "Unable to read stdin.")
 		}
 		if !m.Config.NoLimit && m.Config.MaxInputChars > 0 && int64(len(stdinBytes)) > m.Config.MaxInputChars {
 			stdinBytes = stdinBytes[:m.Config.MaxInputChars]

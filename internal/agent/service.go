@@ -25,22 +25,32 @@ import (
 	"github.com/dotcommander/yai/internal/stream"
 )
 
+// ClientFactory creates a stream.Client from a provider configuration.
+// It allows tests to replace the real Fantasy bridge with a stub.
+type ClientFactory func(fantasybridge.Config) (stream.Client, error)
+
 // Service is the core orchestration layer for starting LLM streams.
 //
 // It is intentionally UI-agnostic and can be used by both the TUI and headless
 // commands.
 type Service struct {
-	cfg   *config.Config
-	cache *cache.Conversations
-	mcp   *mcp.Service
+	cfg           *config.Config
+	cache         *cache.Conversations
+	mcp           *mcp.Service
+	clientFactory ClientFactory
 }
 
-// New creates an agent service.
-func New(cfg *config.Config, cache *cache.Conversations, mcpSvc *mcp.Service) *Service {
+// New creates an agent service. An optional ClientFactory can be provided for
+// testing; when nil, the default Fantasy bridge client is used.
+func New(cfg *config.Config, cache *cache.Conversations, mcpSvc *mcp.Service, opts ...ClientFactory) *Service {
 	if mcpSvc == nil {
 		mcpSvc = mcp.New(cfg)
 	}
-	return &Service{cfg: cfg, cache: cache, mcp: mcpSvc}
+	factory := ClientFactory(NewFantasyClient)
+	if len(opts) > 0 && opts[0] != nil {
+		factory = opts[0]
+	}
+	return &Service{cfg: cfg, cache: cache, mcp: mcpSvc, clientFactory: factory}
 }
 
 // StreamStart contains the stream plus metadata about the resolved request.
@@ -138,7 +148,7 @@ func (s *Service) Stream(ctx context.Context, prompt string) (StreamStart, error
 		request.MaxCompletionTokens = &cfg.MaxCompletionTokens
 	}
 
-	client, err := NewFantasyClient(providerCfg)
+	client, err := s.clientFactory(providerCfg)
 	if err != nil {
 		return StreamStart{}, err
 	}
@@ -158,12 +168,12 @@ func (s *Service) buildMessages(prompt string, mod config.Model) ([]proto.Messag
 	if cfg.Role != "" {
 		roleSetup, ok := cfg.Roles[cfg.Role]
 		if !ok {
-			return nil, errs.Error{Err: fmt.Errorf("role %q does not exist", cfg.Role), Reason: "Could not use role"}
+			return nil, errs.Wrap(fmt.Errorf("role %q does not exist", cfg.Role), "Could not use role")
 		}
 		for _, msg := range roleSetup {
 			content, err := config.LoadMsg(msg)
 			if err != nil {
-				return nil, errs.Error{Err: err, Reason: "Could not use role"}
+				return nil, errs.Wrap(err, "Could not use role")
 			}
 			messages = append(messages, proto.Message{Role: proto.RoleSystem, Content: content})
 		}
@@ -182,10 +192,7 @@ func (s *Service) buildMessages(prompt string, mod config.Model) ([]proto.Messag
 			return nil, errs.Error{Reason: "Cache is not available"}
 		}
 		if err := s.cache.Read(cfg.CacheReadFromID, &messages); err != nil {
-			return nil, errs.Error{
-				Err:    err,
-				Reason: "There was a problem reading the cache. Use --no-cache / NO_CACHE to disable it.",
-			}
+			return nil, errs.Wrap(err, "There was a problem reading the cache. Use --no-cache / NO_CACHE to disable it.")
 		}
 	}
 
@@ -216,17 +223,17 @@ func resolveModel(cfg *config.Config) (config.API, config.Model, error) {
 				available = append(available, name)
 			}
 			slices.Sort(available)
-			return config.API{}, config.Model{}, errs.Error{
-				Err:    errs.UserErrorf("Available models are: %s", strings.Join(available, ", ")),
-				Reason: fmt.Sprintf("The API endpoint %s does not contain the model %s", cfg.API, cfg.Model),
-			}
+			return config.API{}, config.Model{}, errs.Wrap(
+				errs.UserErrorf("Available models are: %s", strings.Join(available, ", ")),
+				fmt.Sprintf("The API endpoint %s does not contain the model %s", cfg.API, cfg.Model),
+			)
 		}
 	}
 
-	return config.API{}, config.Model{}, errs.Error{
-		Reason: fmt.Sprintf("Model %s is not in the settings file.", cfg.Model),
-		Err:    errs.UserErrorf("Please specify an API endpoint with --api or configure the model in the settings: yai --settings"),
-	}
+	return config.API{}, config.Model{}, errs.Wrap(
+		errs.UserErrorf("Please specify an API endpoint with --api or configure the model in the settings: yai --settings"),
+		fmt.Sprintf("Model %s is not in the settings file.", cfg.Model),
+	)
 }
 
 func prepareProviderConfig(ctx context.Context, mod config.Model, api config.API, cfg *config.Config) (fantasybridge.Config, error) {
@@ -234,25 +241,25 @@ func prepareProviderConfig(ctx context.Context, mod config.Model, api config.API
 	case "openrouter":
 		key, err := ensureKey(ctx, api, "OPENROUTER_API_KEY", "https://openrouter.ai/keys")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Error{Err: err, Reason: "OpenRouter authentication failed"}
+			return fantasybridge.Config{}, errs.Wrap(err, "OpenRouter authentication failed")
 		}
 		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "vercel":
 		key, err := ensureKey(ctx, api, "VERCEL_API_KEY", "https://vercel.com/dashboard/tokens")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Error{Err: err, Reason: "Vercel AI Gateway authentication failed"}
+			return fantasybridge.Config{}, errs.Wrap(err, "Vercel AI Gateway authentication failed")
 		}
 		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "bedrock":
 		key, err := optionalKey(ctx, api)
 		if err != nil {
-			return fantasybridge.Config{}, errs.Error{Err: err, Reason: "Bedrock authentication failed"}
+			return fantasybridge.Config{}, errs.Wrap(err, "Bedrock authentication failed")
 		}
 		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "cohere":
 		key, err := ensureKey(ctx, api, "COHERE_API_KEY", "https://dashboard.cohere.com/api-keys")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Error{Err: err, Reason: "Cohere authentication failed"}
+			return fantasybridge.Config{}, errs.Wrap(err, "Cohere authentication failed")
 		}
 		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "ollama":
@@ -264,7 +271,7 @@ func prepareProviderConfig(ctx context.Context, mod config.Model, api config.API
 	case "azure", "azure-ad":
 		key, err := ensureKey(ctx, api, "AZURE_OPENAI_KEY", "https://aka.ms/oai/access")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Error{Err: err, Reason: "Azure authentication failed"}
+			return fantasybridge.Config{}, errs.Wrap(err, "Azure authentication failed")
 		}
 		providerAPI := mod.API
 		if mod.API == "azure-ad" {
@@ -277,19 +284,19 @@ func prepareProviderConfig(ctx context.Context, mod config.Model, api config.API
 	case "anthropic":
 		key, err := ensureKey(ctx, api, "ANTHROPIC_API_KEY", "https://console.anthropic.com/settings/keys")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Error{Err: err, Reason: "Anthropic authentication failed"}
+			return fantasybridge.Config{}, errs.Wrap(err, "Anthropic authentication failed")
 		}
 		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "google":
 		key, err := ensureKey(ctx, api, "GOOGLE_API_KEY", "https://aistudio.google.com/app/apikey")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Error{Err: err, Reason: "Google authentication failed"}
+			return fantasybridge.Config{}, errs.Wrap(err, "Google authentication failed")
 		}
 		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL, ThinkingBudget: mod.ThinkingBudget}, nil
 	default:
 		key, err := ensureKey(ctx, api, "OPENAI_API_KEY", "https://platform.openai.com/account/api-keys")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Error{Err: err, Reason: "OpenAI authentication failed"}
+			return fantasybridge.Config{}, errs.Wrap(err, "OpenAI authentication failed")
 		}
 		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	}
@@ -302,11 +309,11 @@ func ApplyProxyConfig(httpProxy string, providerCfg *fantasybridge.Config) error
 	}
 	proxyURL, err := url.Parse(httpProxy)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "There was an error parsing your proxy URL."}
+		return errs.Wrap(err, "There was an error parsing your proxy URL.")
 	}
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return errs.Error{Err: fmt.Errorf("default transport is not *http.Transport"), Reason: "Could not configure proxy."}
+		return errs.Wrap(fmt.Errorf("default transport is not *http.Transport"), "Could not configure proxy.")
 	}
 	tr := base.Clone()
 	tr.Proxy = http.ProxyURL(proxyURL)
@@ -340,12 +347,12 @@ func ensureKey(ctx context.Context, api config.API, defaultEnv, docsURL string) 
 	if key == "" && api.APIKeyCmd != "" {
 		args, err := shellwords.Parse(api.APIKeyCmd)
 		if err != nil {
-			return "", errs.Error{Err: err, Reason: "Failed to parse api-key-cmd"}
+			return "", errs.Wrap(err, "Failed to parse api-key-cmd")
 		}
 		// #nosec G204 -- api-key-cmd is explicitly configured by the local user.
 		out, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput()
 		if err != nil {
-			return "", errs.Error{Err: err, Reason: "Cannot exec api-key-cmd"}
+			return "", errs.Wrap(err, "Cannot exec api-key-cmd")
 		}
 		key = strings.TrimSpace(string(out))
 	}
@@ -355,10 +362,10 @@ func ensureKey(ctx context.Context, api config.API, defaultEnv, docsURL string) 
 	if key != "" {
 		return key, nil
 	}
-	return "", errs.Error{
-		Reason: fmt.Sprintf("%s required; set %s or update yai.yml through yai --settings.", defaultEnv, defaultEnv),
-		Err:    errs.UserErrorf("You can grab one at %s", docsURL),
-	}
+	return "", errs.Wrap(
+		errs.UserErrorf("You can grab one at %s", docsURL),
+		fmt.Sprintf("%s required; set %s or update yai.yml through yai --settings.", defaultEnv, defaultEnv),
+	)
 }
 
 func optionalKey(ctx context.Context, api config.API) (string, error) {
@@ -369,12 +376,12 @@ func optionalKey(ctx context.Context, api config.API) (string, error) {
 	if key == "" && api.APIKeyCmd != "" {
 		args, err := shellwords.Parse(api.APIKeyCmd)
 		if err != nil {
-			return "", errs.Error{Err: err, Reason: "Failed to parse api-key-cmd"}
+			return "", errs.Wrap(err, "Failed to parse api-key-cmd")
 		}
 		// #nosec G204 -- api-key-cmd is explicitly configured by the local user.
 		out, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput()
 		if err != nil {
-			return "", errs.Error{Err: err, Reason: "Cannot exec api-key-cmd"}
+			return "", errs.Wrap(err, "Cannot exec api-key-cmd")
 		}
 		key = strings.TrimSpace(string(out))
 	}

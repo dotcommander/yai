@@ -30,7 +30,7 @@ func (s *Service) ActionForStreamError(err error, mod config.Model, prompt strin
 		return s.actionForProviderError(providerErr, mod, prompt)
 	}
 	return StreamErrorAction{
-		Err: errs.Error{Err: err, Reason: fmt.Sprintf("There was a problem with the %s API request.", mod.API)},
+		Err: errs.Wrap(err, fmt.Sprintf("There was a problem with the %s API request.", mod.API)),
 	}
 }
 
@@ -47,16 +47,16 @@ func (s *Service) actionForProviderError(err *fantasy.ProviderError, mod config.
 				Retry:         true,
 				Prompt:        prompt,
 				ModelOverride: mod.Fallback,
-				Err:           errs.Error{Err: err, Reason: reason},
+				Err:           errs.Wrap(err, reason),
 			}
 		}
 		return StreamErrorAction{
-			Err: errs.Error{Err: err, Reason: fmt.Sprintf("Missing model '%s' for API '%s'.", cfg.Model, cfg.API)},
+			Err: errs.Wrap(err, fmt.Sprintf("Missing model '%s' for API '%s'.", cfg.Model, cfg.API)),
 		}
 
 	case http.StatusBadRequest:
 		if isContextLengthExceeded(err) {
-			pe := errs.Error{Err: err, Reason: "Maximum prompt size exceeded."}
+			pe := errs.Wrap(err, "Maximum prompt size exceeded.")
 			if cfg.NoLimit {
 				return StreamErrorAction{Err: pe}
 			}
@@ -70,7 +70,7 @@ func (s *Service) actionForProviderError(err *fantasy.ProviderError, mod config.
 		if reason == "" {
 			reason = fmt.Sprintf("%s API request error.", mod.API)
 		}
-		return StreamErrorAction{Err: errs.Error{Err: err, Reason: reason}}
+		return StreamErrorAction{Err: errs.Wrap(err, reason)}
 	}
 
 	if err.IsRetryable() {
@@ -81,7 +81,7 @@ func (s *Service) actionForProviderError(err *fantasy.ProviderError, mod config.
 		return StreamErrorAction{
 			Retry:  true,
 			Prompt: prompt,
-			Err:    errs.Error{Err: err, Reason: reason},
+			Err:    errs.Wrap(err, reason),
 		}
 	}
 
@@ -89,7 +89,7 @@ func (s *Service) actionForProviderError(err *fantasy.ProviderError, mod config.
 	if reason == "" {
 		reason = fmt.Sprintf("%s API request error.", mod.API)
 	}
-	return StreamErrorAction{Err: errs.Error{Err: err, Reason: reason}}
+	return StreamErrorAction{Err: errs.Wrap(err, reason)}
 }
 
 func isContextLengthExceeded(err *fantasy.ProviderError) bool {

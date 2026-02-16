@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -19,8 +18,6 @@ import (
 	"github.com/dotcommander/yai/internal/errs"
 	"github.com/dotcommander/yai/internal/present"
 	"github.com/dotcommander/yai/internal/proto"
-	"github.com/dotcommander/yai/internal/storage"
-	"github.com/dotcommander/yai/internal/storage/cache"
 	"github.com/dotcommander/yai/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -40,11 +37,14 @@ func NewRootCmd(build BuildInfo, cfg config.Config, cfgErr error) *cobra.Command
 	rt := &runtime{build: normalizeBuildInfo(build), cfg: cfg, cfgErr: cfgErr}
 
 	rootCmd := &cobra.Command{
-		Use:           "yai",
-		Short:         "GPT on the command line. Built for pipelines.",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Example:       randomExample(),
+		Use:                "yai",
+		Short:              "GPT on the command line. Built for pipelines.",
+		SilenceUsage:       true,
+		SilenceErrors:      true,
+		Example:            randomExample(),
+		Args:               cobra.ArbitraryArgs,
+		DisableFlagParsing: false,
+		TraverseChildren:   true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if rt.cfgErr != nil {
 				return rt.cfgErr
@@ -154,23 +154,19 @@ func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
 
 	if (isNoArgs(&rt.cfg) || rt.cfg.AskModel) && present.IsInputTTY() {
 		if err := askInfo(&rt.cfg); err != nil && err == huh.ErrUserAborted {
-			return errs.Error{Err: err, Reason: "User canceled."}
+			return errs.Wrap(err, "User canceled.")
 		} else if err != nil {
-			return errs.Error{Err: err, Reason: "Prompt failed."}
+			return errs.Wrap(err, "Prompt failed.")
 		}
 	}
 
-	convoCache, err := cache.NewConversations(rt.cfg.CachePath)
+	store, err := openConversationStore(rt.cfg.CachePath)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't start Bubble Tea program."}
+		return errs.Wrap(err, "Could not open conversation store.")
 	}
-	db, err := storage.Open(filepath.Join(rt.cfg.CachePath, "conversations"))
-	if err != nil {
-		return errs.Error{Err: err, Reason: "Could not open database."}
-	}
-	defer db.Close() //nolint:errcheck
+	defer store.Close() //nolint:errcheck
 
-	pl, err := planConversation(&rt.cfg, db)
+	pl, err := planConversation(&rt.cfg, store.DB)
 	if err != nil {
 		return err
 	}
@@ -180,13 +176,13 @@ func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
 	rt.cfg.API = pl.API
 	rt.cfg.Model = pl.Model
 
-	agentSvc := agent.New(&rt.cfg, convoCache, nil)
+	agentSvc := agent.New(&rt.cfg, store.Cache, nil)
 
 	yai := tui.NewYai(cmd.Context(), present.StderrRenderer(), &rt.cfg, agentSvc)
 	p := tea.NewProgram(yai, opts...)
 	m, err := p.Run()
 	if err != nil {
-		return errs.Error{Err: err, Reason: "Couldn't start Bubble Tea program."}
+		return errs.Wrap(err, "Couldn't start Bubble Tea program.")
 	}
 
 	yai = m.(*tui.Yai)
@@ -196,13 +192,13 @@ func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
 
 	// If we never received any input and nothing was provided, fail.
 	if yai.Input == "" && isNoArgs(&rt.cfg) {
-		return errs.Error{
-			Reason: "You haven't provided any prompt input.",
-			Err: errs.UserErrorf(
+		return errs.Wrap(
+			errs.UserErrorf(
 				"You can give your prompt as arguments and/or pipe it from STDIN.\nExample: %s",
 				present.StdoutStyles().InlineCode.Render("yai [prompt]"),
 			),
-		}
+			"You haven't provided any prompt input.",
+		)
 	}
 
 	// raw mode already prints the output, no need to print it again
@@ -216,7 +212,7 @@ func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Don't write back when we're just showing.
-	if err := saveConversation(&rt.cfg, db, convoCache, yai); err != nil {
+	if err := saveConversation(&rt.cfg, store, yai.Messages()); err != nil {
 		return err
 	}
 
@@ -224,28 +220,24 @@ func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
 }
 
 func showConversation(cfg *config.Config) error {
-	convoCache, err := cache.NewConversations(cfg.CachePath)
+	store, err := openConversationStore(cfg.CachePath)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "There was an error loading the conversation."}
+		return errs.Wrap(err, "Could not open conversation store.")
 	}
-	db, err := storage.Open(filepath.Join(cfg.CachePath, "conversations"))
-	if err != nil {
-		return errs.Error{Err: err, Reason: "Could not open database."}
-	}
-	defer db.Close() //nolint:errcheck
+	defer store.Close() //nolint:errcheck
 
 	in := cfg.Show
 	if cfg.ShowLast {
 		in = ""
 	}
-	found, err := findReadConversation(cfg, db, in)
+	found, err := findReadConversation(cfg, store.DB, in)
 	if err != nil {
-		return errs.Error{Err: err, Reason: "There was an error loading the conversation."}
+		return errs.Wrap(err, "There was an error loading the conversation.")
 	}
 
 	var messages []proto.Message
-	if err := convoCache.Read(found.ID, &messages); err != nil {
-		return errs.Error{Err: err, Reason: "There was an error loading the conversation."}
+	if err := store.Cache.Read(found.ID, &messages); err != nil {
+		return errs.Wrap(err, "There was an error loading the conversation.")
 	}
 
 	out := proto.Conversation(messages).String()

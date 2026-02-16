@@ -18,6 +18,16 @@ type Error struct {
 	Reason string
 }
 
+// Wrap creates an Error with the given underlying error and user-facing reason.
+func Wrap(err error, reason string) Error {
+	return Error{Err: err, Reason: reason}
+}
+
+// Wrapf creates an Error with the given underlying error and a formatted reason.
+func Wrapf(err error, format string, a ...any) Error {
+	return Error{Err: err, Reason: fmt.Sprintf(format, a...)}
+}
+
 func (e Error) Error() string {
 	if e.Err != nil {
 		return e.Err.Error()

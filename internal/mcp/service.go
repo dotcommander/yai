@@ -61,13 +61,13 @@ func (s *Service) Tools(ctx context.Context) (map[string][]mcp.Tool, error) {
 		wg.Go(func() error {
 			serverTools, err := toolsFor(ctx, s.cfg, sname, server)
 			if errors.Is(err, context.DeadlineExceeded) {
-				return errs.Error{
-					Err:    fmt.Errorf("timeout while listing tools for %q - make sure the configuration is correct. If your server requires a docker container, make sure it's running", sname),
-					Reason: "Could not list tools",
-				}
+				return errs.Wrap(
+					fmt.Errorf("timeout while listing tools for %q - make sure the configuration is correct. If your server requires a docker container, make sure it's running", sname),
+					"Could not list tools",
+				)
 			}
 			if err != nil {
-				return errs.Error{Err: err, Reason: "Could not list tools"}
+				return errs.Wrap(err, "Could not list tools")
 			}
 			mu.Lock()
 			result[sname] = append(result[sname], serverTools...)
