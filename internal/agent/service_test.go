@@ -128,6 +128,77 @@ func TestNewWithClientFactory(t *testing.T) {
 	})
 }
 
+func TestStreamReasoningModelDropsSamplingSettings(t *testing.T) {
+	t.Run("reasoning model omits temperature top-p and top-k", func(t *testing.T) {
+		capture := &captureClient{}
+		cfg := &config.Config{
+			Settings: config.Settings{
+				APIs: config.APIs{
+					{
+						Name:   "openai",
+						APIKey: "test-key",
+						Models: map[string]config.Model{
+							"gpt-5": {MaxChars: 100000},
+						},
+					},
+				},
+				Model:       "gpt-5",
+				API:         "openai",
+				Temperature: 1,
+				TopP:        1,
+				TopK:        50,
+			},
+		}
+
+		svc := New(cfg, nil, nil, func(fantasybridge.Config) (stream.Client, error) {
+			return capture, nil
+		})
+
+		_, err := svc.Stream(context.Background(), "hello")
+		require.NoError(t, err)
+		require.NotNil(t, capture.lastRequest)
+		require.Nil(t, capture.lastRequest.Temperature)
+		require.Nil(t, capture.lastRequest.TopP)
+		require.Nil(t, capture.lastRequest.TopK)
+	})
+
+	t.Run("non-reasoning model keeps sampling settings", func(t *testing.T) {
+		capture := &captureClient{}
+		cfg := &config.Config{
+			Settings: config.Settings{
+				APIs: config.APIs{
+					{
+						Name:   "openai",
+						APIKey: "test-key",
+						Models: map[string]config.Model{
+							"gpt-4.1-mini": {MaxChars: 100000},
+						},
+					},
+				},
+				Model:       "gpt-4.1-mini",
+				API:         "openai",
+				Temperature: 0.4,
+				TopP:        0.8,
+				TopK:        10,
+			},
+		}
+
+		svc := New(cfg, nil, nil, func(fantasybridge.Config) (stream.Client, error) {
+			return capture, nil
+		})
+
+		_, err := svc.Stream(context.Background(), "hello")
+		require.NoError(t, err)
+		require.NotNil(t, capture.lastRequest)
+		require.NotNil(t, capture.lastRequest.Temperature)
+		require.NotNil(t, capture.lastRequest.TopP)
+		require.NotNil(t, capture.lastRequest.TopK)
+		require.Equal(t, 0.4, *capture.lastRequest.Temperature)
+		require.Equal(t, 0.8, *capture.lastRequest.TopP)
+		require.EqualValues(t, 10, *capture.lastRequest.TopK)
+	})
+}
+
 // stubClient is a test double for stream.Client.
 type stubClient struct{}
 
@@ -138,10 +209,20 @@ func (s *stubClient) Request(ctx context.Context, req proto.Request) stream.Stre
 // stubStream is a test double for stream.Stream.
 type stubStream struct{}
 
-func (s *stubStream) Next() bool                      { return false }
-func (s *stubStream) Current() (proto.Chunk, error)   { return proto.Chunk{}, nil }
-func (s *stubStream) Err() error                      { return nil }
-func (s *stubStream) Close() error                    { return nil }
-func (s *stubStream) Messages() []proto.Message       { return nil }
+func (s *stubStream) Next() bool                        { return false }
+func (s *stubStream) Current() (proto.Chunk, error)     { return proto.Chunk{}, nil }
+func (s *stubStream) Err() error                        { return nil }
+func (s *stubStream) Close() error                      { return nil }
+func (s *stubStream) Messages() []proto.Message         { return nil }
 func (s *stubStream) CallTools() []proto.ToolCallStatus { return nil }
-func (s *stubStream) DrainWarnings() []string         { return nil }
+func (s *stubStream) DrainWarnings() []string           { return nil }
+
+type captureClient struct {
+	lastRequest *proto.Request
+}
+
+func (c *captureClient) Request(_ context.Context, req proto.Request) stream.Stream {
+	r := req
+	c.lastRequest = &r
+	return &stubStream{}
+}

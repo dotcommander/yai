@@ -84,6 +84,80 @@ func (s *Service) Stream(ctx context.Context, prompt string) (StreamStart, error
 		mod.MaxChars = cfg.MaxInputChars
 	}
 
+	messages, err := s.buildMessages(prompt, mod)
+	if err != nil {
+		return StreamStart{}, err
+	}
+
+	return s.startStream(ctx, messages, mod, providerCfg)
+}
+
+// StreamContinue starts a streaming completion using pre-built conversation
+// history. It prepends system messages (format + role) to the provided history
+// and appends the new user message. This avoids per-turn disk I/O and prevents
+// system message duplication across turns.
+func (s *Service) StreamContinue(ctx context.Context, history []proto.Message, prompt string) (StreamStart, error) {
+	cfg := s.cfg
+
+	api, mod, err := resolveModel(cfg)
+	if err != nil {
+		return StreamStart{}, err
+	}
+	cfg.API = mod.API
+	cfg.Model = mod.Name
+
+	providerCfg, err := prepareProviderConfig(ctx, mod, api, cfg)
+	if err != nil {
+		return StreamStart{}, err
+	}
+	if err := ApplyProxyConfig(cfg.HTTPProxy, &providerCfg); err != nil {
+		return StreamStart{}, err
+	}
+
+	if mod.MaxChars == 0 {
+		mod.MaxChars = cfg.MaxInputChars
+	}
+
+	// Build system messages.
+	messages := make([]proto.Message, 0, len(history)+4)
+
+	if txt := cfg.FormatText[cfg.FormatAs]; cfg.Format && txt != "" {
+		messages = append(messages, proto.Message{Role: proto.RoleSystem, Content: txt})
+	}
+
+	if cfg.Role != "" {
+		roleSetup, ok := cfg.Roles[cfg.Role]
+		if !ok {
+			return StreamStart{}, errs.Wrap(fmt.Errorf("role %q does not exist", cfg.Role), "Could not use role")
+		}
+		for _, msg := range roleSetup {
+			content, err := config.LoadMsg(msg)
+			if err != nil {
+				return StreamStart{}, errs.Wrap(err, "Could not use role")
+			}
+			messages = append(messages, proto.Message{Role: proto.RoleSystem, Content: content})
+		}
+	}
+
+	// Append existing conversation history (without system messages).
+	for _, m := range history {
+		if m.Role != proto.RoleSystem {
+			messages = append(messages, m)
+		}
+	}
+
+	// Truncate and append new user message.
+	if !cfg.NoLimit && mod.MaxChars > 0 && int64(len(prompt)) > mod.MaxChars {
+		prompt = prompt[:mod.MaxChars]
+	}
+	messages = append(messages, proto.Message{Role: proto.RoleUser, Content: prompt})
+
+	return s.startStream(ctx, messages, mod, providerCfg)
+}
+
+func (s *Service) startStream(ctx context.Context, messages []proto.Message, mod config.Model, providerCfg fantasybridge.Config) (StreamStart, error) {
+	cfg := s.cfg
+
 	toolsEnabled := true
 	if !cfg.MCPAllowNonTTY && !present.IsInputTTY() {
 		toolsEnabled = false
@@ -100,11 +174,6 @@ func (s *Service) Stream(ctx context.Context, prompt string) (StreamStart, error
 		}
 	}
 
-	messages, err := s.buildMessages(prompt, mod)
-	if err != nil {
-		return StreamStart{}, err
-	}
-
 	temperature := (*float64)(nil)
 	if cfg.Temperature >= 0 {
 		v := cfg.Temperature
@@ -119,6 +188,12 @@ func (s *Service) Stream(ctx context.Context, prompt string) (StreamStart, error
 	if cfg.TopK >= 0 {
 		v := cfg.TopK
 		topK = &v
+	}
+
+	if isReasoningModel(mod.Name) {
+		temperature = nil
+		topP = nil
+		topK = nil
 	}
 
 	request := proto.Request{
@@ -155,6 +230,21 @@ func (s *Service) Stream(ctx context.Context, prompt string) (StreamStart, error
 
 	st := client.Request(ctx, request)
 	return StreamStart{Stream: st, Model: mod, Messages: messages}, nil
+}
+
+func isReasoningModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return false
+	}
+	if slash := strings.LastIndex(m, "/"); slash >= 0 && slash < len(m)-1 {
+		m = m[slash+1:]
+	}
+
+	return strings.HasPrefix(m, "gpt-5") ||
+		strings.HasPrefix(m, "o1") ||
+		strings.HasPrefix(m, "o3") ||
+		strings.HasPrefix(m, "o4")
 }
 
 func (s *Service) buildMessages(prompt string, mod config.Model) ([]proto.Message, error) {
