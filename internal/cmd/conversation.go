@@ -41,6 +41,10 @@ func (s *conversationStore) Close() error {
 }
 
 func saveConversation(cfg *config.Config, store *conversationStore, msgs []proto.Message) error {
+	return saveConversationWithFeedback(cfg, store, msgs, true)
+}
+
+func saveConversationWithFeedback(cfg *config.Config, store *conversationStore, msgs []proto.Message, showSavedMessage bool) error {
 	if cfg.NoCache {
 		if !cfg.Quiet {
 			fmt.Fprintf(
@@ -74,7 +78,7 @@ func saveConversation(cfg *config.Config, store *conversationStore, msgs []proto
 		return errs.Wrap(err, errReason)
 	}
 
-	if !cfg.Quiet {
+	if showSavedMessage && !cfg.Quiet {
 		fmt.Fprintln(
 			os.Stderr,
 			"\nConversation saved:",

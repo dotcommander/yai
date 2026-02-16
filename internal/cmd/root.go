@@ -75,6 +75,7 @@ func NewRootCmd(build BuildInfo, cfg config.Config, cfgErr error) *cobra.Command
 	rootCmd.AddCommand(newMCPCmd(rt))
 	rootCmd.AddCommand(newManCmd(rootCmd))
 	rootCmd.AddCommand(newUpgradeCmd(rt))
+	rootCmd.AddCommand(newChatCmd(rt))
 
 	// Enable completion now that we have subcommands.
 	rootCmd.InitDefaultCompletionCmd()
