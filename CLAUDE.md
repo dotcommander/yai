@@ -11,14 +11,15 @@ The binary is named `yai` and the Go module path is `github.com/dotcommander/yai
 ## Build & Test
 
 ```bash
-go build ./...                     # build
+go build -o ./yai .               # build (version from git VCS info)
+go build -ldflags "-X main.Version=v0.2.0 -X main.CommitSHA=$(git rev-parse HEAD)" -o ./yai .  # build with explicit version
 go test ./...                      # all tests
 go test -run TestFoo ./...         # single test
 go test -v -cover -timeout=30s ./... # CI-style
 golangci-lint run                  # lint (config in .golangci.yml)
 ```
 
-The built binary is `./yai` (listed in .gitignore as `yai`).
+The built binary is `./yai` (listed in .gitignore as `yai`), symlinked to `~/go/bin/yai` for PATH access.
 
 ## Architecture
 
@@ -109,3 +110,6 @@ The `internal/proto` package defines the shared `Message`, `Request`, `Chunk`, a
 - Unauthorized (401) provider errors now also flow through Fantasy status-title mapping (no custom invalid-key branch).
 - Retry wait timing now uses Fantasy `RetryWithExponentialBackoffRespectingRetryHeaders` (single-step) for provider errors so `retry-after` headers are honored.
 - Current `charm.land/fantasy` version is v0.8.1; provider set is `anthropic`, `azure`, `bedrock`, `google`, `openai`, `openaicompat`, `openrouter`, `vercel`; `cohere` and `ollama` use `openaicompat` routing.
+- Version is injected via ldflags (`-X main.Version`, `-X main.CommitSHA`) in CI/release builds. Local `go build` derives version from Go's embedded VCS info (git tag + commit + dirty state). The fallback chain is: ldflags → `debug.ReadBuildInfo().Main.Version` → `dev-<sha>[-dirty]`.
+- Local dev binary is symlinked: `~/go/bin/yai` → `/Users/vampire/go/src/yai/yai`. After `go build -o ./yai .`, the PATH binary is updated automatically.
+- `yai upgrade` runs `go install github.com/dotcommander/yai@latest` to upgrade in-place.

@@ -65,10 +65,7 @@ func NewRootCmd(build BuildInfo, cfg config.Config, cfgErr error) *cobra.Command
 	rootCmd.SetHelpCommand(&cobra.Command{Hidden: true})
 
 	rootCmd.Version = rt.build.Version
-	if len(rt.build.CommitSHA) >= storage.SHA1Short {
-		vt := rootCmd.VersionTemplate()
-		rootCmd.SetVersionTemplate(vt[:len(vt)-1] + " (" + rt.build.CommitSHA[0:7] + ")\n")
-	}
+	rootCmd.SetVersionTemplate(versionTemplate(rt.build))
 
 	initRootFlags(rootCmd, &rt.cfg)
 
@@ -77,6 +74,7 @@ func NewRootCmd(build BuildInfo, cfg config.Config, cfgErr error) *cobra.Command
 	rootCmd.AddCommand(newConfigCmd(rt))
 	rootCmd.AddCommand(newMCPCmd(rt))
 	rootCmd.AddCommand(newManCmd(rootCmd))
+	rootCmd.AddCommand(newUpgradeCmd(rt))
 
 	// Enable completion now that we have subcommands.
 	rootCmd.InitDefaultCompletionCmd()
