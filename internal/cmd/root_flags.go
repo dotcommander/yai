@@ -35,6 +35,7 @@ func initRootFlags(cmd *cobra.Command, cfg *config.Config) {
 	flags.Var(newDurationFlag(cfg.RequestTimeout, &cfg.RequestTimeout), "request-timeout", present.StdoutStyles().FlagDesc.Render(helpText["request-timeout"]))
 	flags.BoolVar(&cfg.NoLimit, "no-limit", cfg.NoLimit, present.StdoutStyles().FlagDesc.Render(helpText["no-limit"]))
 	flags.Int64Var(&cfg.MaxTokens, "max-tokens", cfg.MaxTokens, present.StdoutStyles().FlagDesc.Render(helpText["max-tokens"]))
+	flags.Int64Var(&cfg.MaxCompletionTokens, "max-completion-tokens", cfg.MaxCompletionTokens, present.StdoutStyles().FlagDesc.Render(helpText["max-completion-tokens"]))
 	flags.IntVar(&cfg.WordWrap, "word-wrap", cfg.WordWrap, present.StdoutStyles().FlagDesc.Render(helpText["word-wrap"]))
 	flags.Float64Var(&cfg.Temperature, "temp", cfg.Temperature, present.StdoutStyles().FlagDesc.Render(helpText["temp"]))
 	flags.StringArrayVar(&cfg.Stop, "stop", cfg.Stop, present.StdoutStyles().FlagDesc.Render(helpText["stop"]))

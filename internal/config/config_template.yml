@@ -36,7 +36,7 @@ status-text: Generating
 theme: charm
 
 max-input-chars: 12250
-max-completion-tokens: 8192
+max-completion-tokens: 0
 
 apis:
   openai:
