@@ -29,11 +29,7 @@ Open (or create) the settings file:
 yai --settings
 ```
 
-Equivalent subcommand:
-
-```bash
-yai config edit
-```
+Equivalent subcommand: `yai config edit`
 
 Then set an API key. Example for OpenAI:
 
@@ -63,14 +59,8 @@ git status | yai "summarize what changed"
 - `yai "..."` prints a response
 - `yai --settings` opens `~/.config/yai/yai.yml`
 
-Equivalent subcommand:
-
-```bash
-yai config edit
-```
-
 ## Related docs
 
-- Pipelines and scripting contract: [`docs/integration.md`](integration.md)
+- Pipelines, scripting contract, and example workflows: [`docs/integration.md`](integration.md)
 - Settings file, roles, and env overrides: [`docs/configuration.md`](configuration.md)
-- Example workflows to copy/paste: [`docs/common-tasks.md`](common-tasks.md)
+- Provider routing and credentials: [`docs/providers.md`](providers.md)

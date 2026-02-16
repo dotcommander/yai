@@ -1,6 +1,6 @@
 # yai
 
-yai is a CLI that sends a prompt (and optional stdin) to an LLM and streams the response.
+yai is a CLI that sends a prompt (and optional stdin) to an LLM and streams the response. Refactored from [charmbracelet/mods](https://github.com/charmbracelet/mods).
 
 Use it for:
 
@@ -13,8 +13,6 @@ Use it for:
 1) Install
 
 ```bash
-brew install charmbracelet/tap/yai
-# or
 go install github.com/dotcommander/yai@latest
 ```
 
@@ -32,3 +30,7 @@ git status | yai "summarize what changed"
 ```
 
 Docs: [`docs/README.md`](docs/README.md)
+
+## Acknowledgments
+
+yai is a refactored fork of [mods](https://github.com/charmbracelet/mods) by [Charmbracelet](https://charm.sh). The original project and its excellent Bubble Tea TUI framework made yai possible. Licensed under MIT — see [LICENSE](LICENSE).

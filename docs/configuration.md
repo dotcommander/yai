@@ -65,11 +65,11 @@ yai --role shell "list files in the current directory"
 
 Role files can also live under `~/.config/yai/roles/`:
 
-- Only `.md` files are loaded
+- Markdown files (`.md`) and other non-YAML text files are loaded as file content
+- YAML files (`.yml` or `.yaml`) parse as a string or list of strings
 - Discovery is recursive
 - The role name is the relative path without extension
-
-Markdown role files may include YAML frontmatter; frontmatter is ignored.
+- Markdown files may include YAML frontmatter; frontmatter is ignored
 
 ## Related docs
 
