@@ -48,7 +48,7 @@ func TestToFantasyPrompt(t *testing.T) {
 
 func TestFromMCPTools(t *testing.T) {
 	tools := fromMCPTools(map[string][]mcp.Tool{
-		"server": []mcp.Tool{
+		"server": {
 			{
 				Name:        "search",
 				Description: "search docs",

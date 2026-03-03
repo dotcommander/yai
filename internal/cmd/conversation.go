@@ -37,7 +37,10 @@ func openConversationStore(cachePath string) (*conversationStore, error) {
 
 // Close releases the underlying DB resources.
 func (s *conversationStore) Close() error {
-	return s.DB.Close()
+	if err := s.DB.Close(); err != nil {
+		return fmt.Errorf("close conversation store: %w", err)
+	}
+	return nil
 }
 
 func saveConversation(cfg *config.Config, store *conversationStore, msgs []proto.Message) error {
@@ -79,7 +82,7 @@ func saveConversationWithFeedback(cfg *config.Config, store *conversationStore, 
 	}
 
 	if showSavedMessage && !cfg.Quiet {
-		fmt.Fprintln(
+		fmt.Fprintln( //nolint:gosec // G705: writing to stderr, not an HTTP response; XSS is not applicable here
 			os.Stderr,
 			"\nConversation saved:",
 			present.StderrStyles().InlineCode.Render(cfg.CacheWriteToID[:storage.SHA1Short]),

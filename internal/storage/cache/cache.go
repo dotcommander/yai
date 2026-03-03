@@ -113,7 +113,7 @@ func (c *Cache[T]) Write(id string, writeFn func(io.Writer) error) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := os.Rename(tmpName, path); err != nil { //nolint:gosec // G703: paths are constructed from validated cache dir and ID, not user input
 		return fmt.Errorf("write: %w", err)
 	}
 	if d, err := os.Open(dir); err == nil {

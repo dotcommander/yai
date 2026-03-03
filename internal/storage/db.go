@@ -465,10 +465,13 @@ func (c *DB) compactLocked() error {
 func syncDir(path string) error {
 	d, err := os.Open(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("sync dir: %w", err)
 	}
 	defer func() { _ = d.Close() }()
-	return d.Sync()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("sync dir: %w", err)
+	}
+	return nil
 }
 
 func sortConversationsByUpdatedAtDesc(convos []Conversation) {

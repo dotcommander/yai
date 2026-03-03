@@ -26,7 +26,7 @@ const (
 type Config struct {
 	API            string
 	BaseURL        string
-	APIKey         string
+	APIKey         string //nolint:gosec // G117: required provider config field, not a hardcoded credential
 	HTTPClient     *http.Client
 	ThinkingBudget int
 }

@@ -30,7 +30,7 @@ type ToolCallStatus struct {
 
 func (c ToolCallStatus) String() string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\n> Ran tool: `%s`\n", c.Name))
+	fmt.Fprintf(&sb, "\n> Ran tool: `%s`\n", c.Name)
 	if c.Err != nil {
 		sb.WriteString(">\n> *Failed*:\n> ```\n")
 		for line := range strings.SplitSeq(c.Err.Error(), "\n") {
