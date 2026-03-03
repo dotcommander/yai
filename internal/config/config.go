@@ -24,6 +24,9 @@ var configTemplate string
 //go:embed tldr_role.md
 var tldrRole string
 
+//go:embed patch_role.md
+var patchRole string
+
 const (
 	defaultMarkdownFormatText = "Format the response as markdown without enclosing backticks."
 	defaultJSONFormatText     = "Format the response as json without enclosing backticks."
@@ -42,7 +45,7 @@ type Model struct {
 // API represents an API endpoint and its models.
 type API struct {
 	Name      string
-	APIKey    string           `yaml:"api-key"`
+	APIKey    string           `yaml:"api-key"` //nolint:gosec // G117: config struct field required for YAML unmarshalling, not a hardcoded credential
 	APIKeyEnv string           `yaml:"api-key-env"`
 	APIKeyCmd string           `yaml:"api-key-cmd"`
 	Version   string           `yaml:"version"` // not used
@@ -153,6 +156,7 @@ type Runtime struct {
 	MCPList         bool
 	MCPListTools    bool
 	OpenEditor      bool
+	Patch           bool
 
 	CacheReadFromID                   string
 	CacheWriteToID, CacheWriteToTitle string
@@ -212,6 +216,7 @@ func Ensure() (Config, error) {
 	if err := MergeRolesFromDir(&c); err != nil {
 		return c, errs.Wrap(err, "Could not load roles from roles directory.")
 	}
+	RegisterBuiltinRoles(&c)
 
 	if c.CachePath == "" {
 		c.CachePath = filepath.Join(home, ".config", "yai", "history")
@@ -309,7 +314,6 @@ func readRolesFromDir(dir string) (map[string][]string, error) {
 	return roles, nil
 }
 
-
 // WriteConfigFile creates the config file at path if it does not exist.
 func WriteConfigFile(path string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
@@ -344,7 +348,7 @@ func createConfigFile(path string) error {
 	if err := tmp.Close(); err != nil {
 		return errs.Wrap(err, "Could not write configuration file.")
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := os.Rename(tmpName, path); err != nil { //nolint:gosec // G703: paths are from os.CreateTemp and filepath.Join, not user input
 		return errs.Wrap(err, "Could not write configuration file.")
 	}
 	if d, err := os.Open(dir); err == nil {
@@ -358,6 +362,17 @@ func createConfigFile(path string) error {
 	return nil
 }
 
+// starterRole pairs a filename with its embedded content.
+type starterRole struct {
+	filename string
+	content  string
+}
+
+var starterRoles = []starterRole{
+	{"tldr.md", tldrRole},
+	{"diff.md", patchRole},
+}
+
 // installStarterRoles writes bundled role files into the roles/ directory
 // next to the config file. Existing files are never overwritten.
 func installStarterRoles(configDir string) {
@@ -365,11 +380,29 @@ func installStarterRoles(configDir string) {
 	if err := os.MkdirAll(rolesDir, 0o700); err != nil {
 		return
 	}
-	dest := filepath.Join(rolesDir, "tldr.md")
-	if _, err := os.Stat(dest); err == nil {
-		return // already exists
+	for _, r := range starterRoles {
+		dest := filepath.Join(rolesDir, r.filename)
+		f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			continue
+		}
+		_, _ = f.Write([]byte(r.content))
+		_ = f.Close()
 	}
-	_ = os.WriteFile(dest, []byte(tldrRole), 0o600)
+}
+
+// RegisterBuiltinRoles ensures built-in roles (diff, tldr) are available
+// in-memory even if the on-disk role files are missing.
+func RegisterBuiltinRoles(cfg *Config) {
+	if cfg.Roles == nil {
+		cfg.Roles = map[string][]string{}
+	}
+	if _, exists := cfg.Roles["tldr"]; !exists {
+		cfg.Roles["tldr"] = []string{tldrRole}
+	}
+	if _, exists := cfg.Roles["diff"]; !exists {
+		cfg.Roles["diff"] = []string{patchRole}
+	}
 }
 
 // Default returns the default configuration values.

@@ -7,7 +7,7 @@ import (
 )
 
 func (m *Yai) handleStreamError(err error, mod config.Model, prompt string) tea.Msg {
-	action := m.agent.ActionForStreamError(err, mod, prompt)
+	action := m.agent.ActionForStreamError(err, mod, prompt, m.Config.NoLimit)
 	if action.ModelOverride != "" {
 		m.Config.Model = action.ModelOverride
 	}

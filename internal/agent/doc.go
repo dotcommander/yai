@@ -1,5 +1,5 @@
-// Package agent contains yai's core (non-UI) logic.
+// Package agent contains yai's core non-UI orchestration.
 //
-// It resolves the model/provider configuration, prepares the request (including
-// MCP tools), and starts a streaming completion.
+// It wires MCP tools, starts stream execution, and normalizes stream errors.
+// API/model selection and request construction are handled by caller layers.
 package agent

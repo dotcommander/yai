@@ -117,12 +117,13 @@ func (rt *runtime) runChat(ctx context.Context, args []string) error {
 	}
 
 	agentSvc := agent.New(&rt.cfg, store.Cache, nil)
+	startStreamFn := makeHistoryStreamStarter(&rt.cfg, agentSvc)
 
 	saveFn := func(msgs []proto.Message) error {
 		return saveConversationWithFeedback(&rt.cfg, store, msgs, false)
 	}
 
-	chat := tui.NewChat(ctx, present.StderrRenderer(), &rt.cfg, agentSvc, history, saveFn, initialPrompt)
+	chat := tui.NewChat(ctx, present.StderrRenderer(), &rt.cfg, agentSvc, startStreamFn, history, saveFn, initialPrompt)
 
 	p := tea.NewProgram(chat, tea.WithAltScreen(), tea.WithOutput(os.Stderr))
 	m, err := p.Run()

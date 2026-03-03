@@ -7,16 +7,17 @@ import (
 	"testing"
 
 	"github.com/dotcommander/yai/internal/config"
+	"github.com/dotcommander/yai/internal/present"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRemoveWhitespace(t *testing.T) {
 	t.Run("only whitespaces", func(t *testing.T) {
-		require.Equal(t, "", removeWhitespace(" \n"))
+		require.Equal(t, "", present.RemoveWhitespace(" \n"))
 	})
 
 	t.Run("regular text", func(t *testing.T) {
-		require.Equal(t, " regular\n ", removeWhitespace(" regular\n "))
+		require.Equal(t, " regular\n ", present.RemoveWhitespace(" regular\n "))
 	})
 }
 

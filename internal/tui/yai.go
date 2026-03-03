@@ -13,7 +13,6 @@ import (
 	"time"
 	"unicode"
 
-	"charm.land/fantasy"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -56,8 +55,9 @@ type Yai struct {
 	width        int
 	height       int
 
-	Config *config.Config
-	agent  *agent.Service
+	Config        *config.Config
+	agent         *agent.Service
+	startStreamFn func(context.Context, string) (agent.StreamStart, error)
 
 	content      []string
 	contentMutex *sync.Mutex
@@ -71,6 +71,7 @@ type Yai struct {
 	dirtyOutput     bool
 	stopWarned      bool
 	mcpNonTTYWarned bool
+	streamStartedAt time.Time
 
 	ctx context.Context
 }
@@ -81,6 +82,7 @@ func NewYai(
 	r *lipgloss.Renderer,
 	cfg *config.Config,
 	agentSvc *agent.Service,
+	startStreamFn func(context.Context, string) (agent.StreamStart, error),
 ) *Yai {
 	gr, _ := glamour.NewTermRenderer(
 		glamour.WithEnvironmentConfig(),
@@ -91,15 +93,16 @@ func NewYai(
 	// agentSvc must be provided by the caller so that the TUI stays focused on
 	// rendering and streaming (no config resolution, cache wiring, etc.).
 	return &Yai{
-		Styles:       present.MakeStyles(r),
-		glam:         gr,
-		state:        startState,
-		renderer:     r,
-		glamViewport: vp,
-		contentMutex: &sync.Mutex{},
-		Config:       cfg,
-		agent:        agentSvc,
-		ctx:          ctx,
+		Styles:        present.MakeStyles(r),
+		glam:          gr,
+		state:         startState,
+		renderer:      r,
+		glamViewport:  vp,
+		contentMutex:  &sync.Mutex{},
+		startStreamFn: startStreamFn,
+		Config:        cfg,
+		agent:         agentSvc,
+		ctx:           ctx,
 	}
 }
 
@@ -133,7 +136,7 @@ func (m *Yai) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case completionInput:
 		if msg.content != "" {
-			m.Input = removeWhitespace(msg.content)
+			m.Input = present.RemoveWhitespace(msg.content)
 		}
 		if m.Input == "" && m.Config.Prefix == "" {
 			return m, m.quit
@@ -166,6 +169,10 @@ func (m *Yai) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.quit
 		}
 		if msg.content != "" {
+			if m.state == requestState && !m.streamStartedAt.IsZero() && !m.Config.Quiet {
+				ttft := time.Since(m.streamStartedAt)
+				fmt.Fprintln(os.Stderr, m.Styles.Comment.Render(fmt.Sprintf(ttftFormat, ttft.Milliseconds())))
+			}
 			m.appendToOutput(msg.content)
 			m.state = responseState
 			if m.shouldRenderFormattedOutput() && m.dirtyOutput && !m.renderScheduled {
@@ -272,24 +279,8 @@ func (m *Yai) retry(content string, err errs.Error) tea.Msg {
 	if m.retries >= m.Config.MaxRetries {
 		return err
 	}
-	m.waitForFantasyRetryDelay(err.Err)
+	waitForRetryDelay(m.retries, err.Err)
 	return completionInput{content}
-}
-
-func (m *Yai) waitForFantasyRetryDelay(retryErr error) {
-	var providerErr *fantasy.ProviderError
-	if !errors.As(retryErr, &providerErr) {
-		return
-	}
-
-	opts := fantasy.DefaultRetryOptions()
-	opts.MaxRetries = 1
-	opts.InitialDelayIn = 100 * time.Millisecond
-
-	retryFn := fantasy.RetryWithExponentialBackoffRespectingRetryHeaders[struct{}](opts)
-	_, _ = retryFn(m.ctx, func() (struct{}, error) {
-		return struct{}{}, providerErr
-	})
 }
 
 func (m *Yai) startCompletionCmd(content string) tea.Cmd {
@@ -297,6 +288,10 @@ func (m *Yai) startCompletionCmd(content string) tea.Cmd {
 		if m.agent == nil {
 			return errs.Error{Reason: "Agent is not available"}
 		}
+		if m.startStreamFn == nil {
+			return errs.Error{Reason: "Stream starter is not available"}
+		}
+		m.streamStartedAt = time.Now()
 		m.closeActiveStream()
 		ctx := m.ctx
 		if m.Config.RequestTimeout > 0 {
@@ -304,7 +299,7 @@ func (m *Yai) startCompletionCmd(content string) tea.Cmd {
 			ctx = cctx
 			m.activeCancel = cancel
 		}
-		res, err := m.agent.Stream(ctx, content)
+		res, err := m.startStreamFn(ctx, content)
 		if err != nil {
 			m.closeActiveStream()
 			var e errs.Error
@@ -405,14 +400,9 @@ const tabWidth = 4
 const maxRetainedOutputBytes = 2 * 1024 * 1024
 
 func (m *Yai) closeActiveStream() {
-	if m.activeStream != nil {
-		_ = m.activeStream.Close()
-		m.activeStream = nil
-	}
-	if m.activeCancel != nil {
-		m.activeCancel()
-		m.activeCancel = nil
-	}
+	closeStream(m.activeStream, m.activeCancel)
+	m.activeStream = nil
+	m.activeCancel = nil
 }
 
 func (m *Yai) outputStringForRender() string {
@@ -486,14 +476,6 @@ func (m *Yai) renderFormattedOutput() {
 		m.glamViewport.GotoBottom()
 	}
 	m.dirtyOutput = false
-}
-
-// if the input is whitespace only, make it empty.
-func removeWhitespace(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return ""
-	}
-	return s
 }
 
 func increaseIndent(s string) string {

@@ -124,7 +124,7 @@ data:
 }
 
 func TestInstallStarterRoles(t *testing.T) {
-	t.Run("creates tldr.md role file", func(t *testing.T) {
+	t.Run("creates tldr.md and diff.md role files", func(t *testing.T) {
 		configDir := t.TempDir()
 		rolesDir := filepath.Join(configDir, "roles")
 
@@ -132,14 +132,20 @@ func TestInstallStarterRoles(t *testing.T) {
 
 		tldrPath := filepath.Join(rolesDir, "tldr.md")
 		require.FileExists(t, tldrPath)
-
 		content, err := os.ReadFile(tldrPath)
 		require.NoError(t, err)
 		require.NotEmpty(t, content)
 		require.Contains(t, string(content), "concise")
+
+		diffPath := filepath.Join(rolesDir, "diff.md")
+		require.FileExists(t, diffPath)
+		content, err = os.ReadFile(diffPath)
+		require.NoError(t, err)
+		require.NotEmpty(t, content)
+		require.Contains(t, string(content), "unified diff")
 	})
 
-	t.Run("does not overwrite existing tldr.md", func(t *testing.T) {
+	t.Run("does not overwrite existing role files", func(t *testing.T) {
 		configDir := t.TempDir()
 		rolesDir := filepath.Join(configDir, "roles")
 		require.NoError(t, os.MkdirAll(rolesDir, 0o700))
@@ -148,11 +154,45 @@ func TestInstallStarterRoles(t *testing.T) {
 		existingContent := "custom tldr content"
 		require.NoError(t, os.WriteFile(tldrPath, []byte(existingContent), 0o600))
 
+		diffPath := filepath.Join(rolesDir, "diff.md")
+		existingDiff := "custom diff content"
+		require.NoError(t, os.WriteFile(diffPath, []byte(existingDiff), 0o600))
+
 		installStarterRoles(configDir)
 
 		content, err := os.ReadFile(tldrPath)
 		require.NoError(t, err)
 		require.Equal(t, existingContent, string(content))
+
+		content, err = os.ReadFile(diffPath)
+		require.NoError(t, err)
+		require.Equal(t, existingDiff, string(content))
+	})
+}
+
+func TestRegisterBuiltinRoles(t *testing.T) {
+	t.Run("registers diff and tldr when roles map is nil", func(t *testing.T) {
+		cfg := &Config{}
+		RegisterBuiltinRoles(cfg)
+
+		require.Contains(t, cfg.Roles, "diff")
+		require.Contains(t, cfg.Roles, "tldr")
+		require.Contains(t, cfg.Roles["diff"][0], "unified diff")
+		require.Contains(t, cfg.Roles["tldr"][0], "concise")
+	})
+
+	t.Run("does not overwrite user-defined roles", func(t *testing.T) {
+		cfg := &Config{
+			Settings: Settings{
+				Roles: map[string][]string{
+					"diff": {"user custom diff"},
+				},
+			},
+		}
+		RegisterBuiltinRoles(cfg)
+
+		require.Equal(t, []string{"user custom diff"}, cfg.Roles["diff"])
+		require.Contains(t, cfg.Roles, "tldr")
 	})
 }
 
@@ -167,7 +207,14 @@ func TestCreateConfigFileInstallsStarterRoles(t *testing.T) {
 		tldrPath := filepath.Join(configDir, "roles", "tldr.md")
 		require.FileExists(t, tldrPath)
 
+		diffPath := filepath.Join(configDir, "roles", "diff.md")
+		require.FileExists(t, diffPath)
+
 		content, err := os.ReadFile(tldrPath)
+		require.NoError(t, err)
+		require.NotEmpty(t, content)
+
+		content, err = os.ReadFile(diffPath)
 		require.NoError(t, err)
 		require.NotEmpty(t, content)
 	})

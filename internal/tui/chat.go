@@ -10,7 +10,6 @@ import (
 	"time"
 	"unicode"
 
-	"charm.land/fantasy"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -52,10 +51,11 @@ type Chat struct {
 	activeStream stream.Stream
 	activeCancel context.CancelFunc
 
-	agent  *agent.Service
-	saveFn SaveFn
-	cfg    *config.Config
-	ctx    context.Context
+	agent         *agent.Service
+	startStreamFn func(context.Context, []proto.Message, string) (agent.StreamStart, error)
+	saveFn        SaveFn
+	cfg           *config.Config
+	ctx           context.Context
 
 	width  int
 	height int
@@ -74,6 +74,7 @@ func NewChat(
 	r *lipgloss.Renderer,
 	cfg *config.Config,
 	agentSvc *agent.Service,
+	startStreamFn func(context.Context, []proto.Message, string) (agent.StreamStart, error),
 	history []proto.Message,
 	saveFn SaveFn,
 	initialPrompt string,
@@ -103,6 +104,7 @@ func NewChat(
 		cfg:           cfg,
 		ctx:           ctx,
 		history:       history,
+		startStreamFn: startStreamFn,
 		initialPrompt: initialPrompt,
 	}
 
@@ -218,6 +220,10 @@ func (c *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return c, nil
 		}
 		if msg.content != "" {
+			if !c.waitingSince.IsZero() && c.streamBuf.Len() == 0 && !c.cfg.Quiet {
+				ttft := time.Since(c.waitingSince)
+				fmt.Fprintln(os.Stderr, c.styles.Comment.Render(fmt.Sprintf(ttftFormat, ttft.Milliseconds())))
+			}
 			c.waitingSince = time.Time{}
 			c.streamBuf.WriteString(msg.content)
 			c.resizeViewport()
@@ -319,6 +325,9 @@ func (c *Chat) startStreamCmd(prompt string) tea.Cmd {
 		if c.agent == nil {
 			return errs.Error{Reason: "Agent is not available"}
 		}
+		if c.startStreamFn == nil {
+			return errs.Error{Reason: "Stream starter is not available"}
+		}
 		c.closeActiveStream()
 
 		ctx := c.ctx
@@ -328,7 +337,7 @@ func (c *Chat) startStreamCmd(prompt string) tea.Cmd {
 			c.activeCancel = cancel
 		}
 
-		res, err := c.agent.StreamContinue(ctx, c.history, prompt)
+		res, err := c.startStreamFn(ctx, c.history, prompt)
 		if err != nil {
 			c.closeActiveStream()
 			var e errs.Error
@@ -400,33 +409,36 @@ func (c *Chat) receiveStreamCmd(msg chatStreamChunkMsg) tea.Cmd {
 }
 
 func (c *Chat) handleStreamError(err error, mod config.Model, prompt string) tea.Msg {
-	var providerErr *fantasy.ProviderError
-	if errors.As(err, &providerErr) && providerErr.IsRetryable() {
-		c.retries++
-		if c.retries < c.cfg.MaxRetries {
-			c.waitForRetryDelay(err)
-			return chatSubmitMsg{prompt: prompt}
-		}
+	action := c.agent.ActionForStreamError(err, mod, prompt, c.cfg.NoLimit)
+	if action.ModelOverride != "" {
+		c.cfg.Model = action.ModelOverride
 	}
+
+	if action.Retry {
+		next := action.Prompt
+		if next == "" {
+			next = prompt
+		}
+		return c.retry(action.Err, next)
+	}
+
 	var e errs.Error
 	if errors.As(err, &e) {
 		return e
 	}
-	return errs.Error{Err: err}
+	if action.Err.Err == nil {
+		return errs.Error{Err: err}
+	}
+	return action.Err
 }
 
-func (c *Chat) waitForRetryDelay(retryErr error) {
-	var providerErr *fantasy.ProviderError
-	if !errors.As(retryErr, &providerErr) {
-		return
+func (c *Chat) retry(err errs.Error, content string) tea.Msg {
+	c.retries++
+	if c.retries >= c.cfg.MaxRetries {
+		return err
 	}
-	opts := fantasy.DefaultRetryOptions()
-	opts.MaxRetries = 1
-	opts.InitialDelayIn = 100 * time.Millisecond
-	retryFn := fantasy.RetryWithExponentialBackoffRespectingRetryHeaders[struct{}](opts)
-	_, _ = retryFn(c.ctx, func() (struct{}, error) {
-		return struct{}{}, providerErr
-	})
+	waitForRetryDelay(c.retries, err.Err)
+	return chatSubmitMsg{prompt: content}
 }
 
 func (c *Chat) finishTurn() {
@@ -446,14 +458,9 @@ func (c *Chat) finishTurn() {
 }
 
 func (c *Chat) closeActiveStream() {
-	if c.activeStream != nil {
-		_ = c.activeStream.Close()
-		c.activeStream = nil
-	}
-	if c.activeCancel != nil {
-		c.activeCancel()
-		c.activeCancel = nil
-	}
+	closeStream(c.activeStream, c.activeCancel)
+	c.activeStream = nil
+	c.activeCancel = nil
 }
 
 func (c *Chat) refreshViewport() {

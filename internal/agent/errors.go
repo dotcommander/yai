@@ -24,18 +24,17 @@ type StreamErrorAction struct {
 
 // ActionForStreamError decides whether a provider error should be retried, and
 // if so which prompt/model override should be used.
-func (s *Service) ActionForStreamError(err error, mod config.Model, prompt string) StreamErrorAction {
+func (s *Service) ActionForStreamError(err error, mod config.Model, prompt string, noLimit bool) StreamErrorAction {
 	var providerErr *fantasy.ProviderError
 	if errors.As(err, &providerErr) {
-		return s.actionForProviderError(providerErr, mod, prompt)
+		return s.actionForProviderError(providerErr, mod, prompt, noLimit)
 	}
 	return StreamErrorAction{
 		Err: errs.Wrap(err, fmt.Sprintf("There was a problem with the %s API request.", mod.API)),
 	}
 }
 
-func (s *Service) actionForProviderError(err *fantasy.ProviderError, mod config.Model, prompt string) StreamErrorAction {
-	cfg := s.cfg
+func (s *Service) actionForProviderError(err *fantasy.ProviderError, mod config.Model, prompt string, noLimit bool) StreamErrorAction {
 	switch err.StatusCode {
 	case http.StatusNotFound:
 		if mod.Fallback != "" {
@@ -51,13 +50,13 @@ func (s *Service) actionForProviderError(err *fantasy.ProviderError, mod config.
 			}
 		}
 		return StreamErrorAction{
-			Err: errs.Wrap(err, fmt.Sprintf("Missing model '%s' for API '%s'.", cfg.Model, cfg.API)),
+			Err: errs.Wrap(err, fmt.Sprintf("Missing model '%s' for API '%s'.", mod.Name, mod.API)),
 		}
 
 	case http.StatusBadRequest:
 		if isContextLengthExceeded(err) {
 			pe := errs.Wrap(err, "Maximum prompt size exceeded.")
-			if cfg.NoLimit {
+			if noLimit {
 				return StreamErrorAction{Err: pe}
 			}
 			return StreamErrorAction{

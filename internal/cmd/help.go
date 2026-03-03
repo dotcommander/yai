@@ -57,4 +57,5 @@ var helpText = map[string]string{
 	"mcp-timeout":           "Timeout for MCP server calls, defaults to 15 seconds",
 	"mcp-allow-non-tty":     "Allow MCP tool exposure/execution when STDIN is not a TTY (disabled by default)",
 	"mcp-no-inherit-env":    "Do not inherit the full process environment for stdio MCP servers",
+	"patch":                 "Output a unified diff instead of prose (implies --raw, uses built-in diff role)",
 }

@@ -50,6 +50,7 @@ func initRootFlags(cmd *cobra.Command, cfg *config.Config) {
 	flags.StringVarP(&cfg.Role, "role", "R", cfg.Role, present.StdoutStyles().FlagDesc.Render(helpText["role"]))
 	flags.BoolVar(&cfg.ListRoles, "list-roles", cfg.ListRoles, present.StdoutStyles().FlagDesc.Render(helpText["list-roles"]))
 	flags.StringVar(&cfg.Theme, "theme", "charm", present.StdoutStyles().FlagDesc.Render(helpText["theme"]))
+	flags.BoolVar(&cfg.Patch, "patch", false, present.StdoutStyles().FlagDesc.Render(helpText["patch"]))
 	flags.BoolVarP(&cfg.OpenEditor, "editor", "e", false, present.StdoutStyles().FlagDesc.Render(helpText["editor"]))
 	flags.BoolVar(&cfg.MCPList, "mcp-list", false, present.StdoutStyles().FlagDesc.Render(helpText["mcp-list"]))
 	flags.BoolVar(&cfg.MCPListTools, "mcp-list-tools", false, present.StdoutStyles().FlagDesc.Render(helpText["mcp-list-tools"]))

@@ -44,7 +44,7 @@ func BenchmarkStreamingRenderComparison(b *testing.B) {
 
 func newBenchmarkYaiForRender() *Yai {
 	r := lipgloss.NewRenderer(io.Discard)
-	m := NewYai(context.Background(), r, &config.Config{Settings: config.Settings{WordWrap: 100}}, nil)
+	m := NewYai(context.Background(), r, &config.Config{Settings: config.Settings{WordWrap: 100}}, nil, nil)
 
 	m.width = 120
 	m.height = 40

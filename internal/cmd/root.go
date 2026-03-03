@@ -84,7 +84,19 @@ func NewRootCmd(build BuildInfo, cfg config.Config, cfgErr error) *cobra.Command
 }
 
 func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
-	rt.cfg.Prefix = removeWhitespace(strings.Join(args, " "))
+	rt.cfg.Prefix = present.RemoveWhitespace(strings.Join(args, " "))
+
+	if rt.cfg.Patch {
+		if cmd.Flags().Changed("format") {
+			return fmt.Errorf("%w", errs.UserErrorf("--patch and --format cannot be used together"))
+		}
+		if cmd.Flags().Changed("role") {
+			return fmt.Errorf("%w", errs.UserErrorf("--patch and --role cannot be used together"))
+		}
+		rt.cfg.Raw = true
+		rt.cfg.Role = "diff"
+		rt.cfg.Format = false
+	}
 
 	opts := []tea.ProgramOption{}
 
@@ -178,8 +190,8 @@ func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
 	rt.cfg.Model = pl.Model
 
 	agentSvc := agent.New(&rt.cfg, store.Cache, nil)
-
-	yai := tui.NewYai(cmd.Context(), present.StderrRenderer(), &rt.cfg, agentSvc)
+	startStreamFn := makePromptStreamStarter(&rt.cfg, store.Cache, agentSvc)
+	yai := tui.NewYai(cmd.Context(), present.StderrRenderer(), &rt.cfg, agentSvc, startStreamFn)
 	p := tea.NewProgram(yai, opts...)
 	m, err := p.Run()
 	if err != nil {
@@ -258,7 +270,7 @@ func prefixFromEditor(appName string) (string, error) {
 		return "", fmt.Errorf("could not create temporary file: %w", err)
 	}
 	_ = f.Close()
-	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = os.Remove(f.Name()) }() //nolint:gosec // G703: path from os.CreateTemp, not user input
 
 	c, err := editor.Cmd(
 		appName,
@@ -273,18 +285,11 @@ func prefixFromEditor(appName string) (string, error) {
 	if err := c.Run(); err != nil {
 		return "", fmt.Errorf("could not open editor: %w", err)
 	}
-	prompt, err := os.ReadFile(f.Name())
+	prompt, err := os.ReadFile(f.Name()) //nolint:gosec // G703: path from os.CreateTemp, not user input
 	if err != nil {
 		return "", fmt.Errorf("could not read file: %w", err)
 	}
 	return string(prompt), nil
-}
-
-func removeWhitespace(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return ""
-	}
-	return s
 }
 
 // askInfo is the interactive prompt that can pick API/model and optionally the prompt.

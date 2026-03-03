@@ -11,6 +11,7 @@ var examples = map[string]string{
 	"Write new sections for a readme": `cat README.md | yai "write a new section to this README documenting a pdf sharing feature"`,
 	"Editorialize your video files":   `ls ~/vids | yai -f "summarize each of these titles, group them by decade" | glow`,
 	"Let GPT pick something to watch": `ls ~/vids | yai "Pick 5 action packed shows from the 80s from this list" | gum choose | xargs vlc`,
+	"Generate a patch for a Go file":  `cat main.go | yai --patch "add error handling to the Open call"`,
 }
 
 func randomExample() string {

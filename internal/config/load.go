@@ -23,51 +23,58 @@ import (
 // For markdown files loaded via file://, YAML frontmatter is stripped.
 func LoadMsg(msg string) (string, error) {
 	if strings.HasPrefix(msg, "https://") || strings.HasPrefix(msg, "http://") {
-		const maxRemoteMsgBytes = 2 * 1024 * 1024
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, msg, nil)
-		if err != nil {
-			return "", fmt.Errorf("fetch role message: %w", err)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return "", fmt.Errorf("fetch role message: %w", err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			bts, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-			return "", fmt.Errorf("fetch role message: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bts)))
-		}
-		bts, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteMsgBytes))
-		if err != nil {
-			return "", fmt.Errorf("read role message: %w", err)
-		}
-		if len(bts) >= maxRemoteMsgBytes {
-			return "", fmt.Errorf("read role message: response too large (>%d bytes)", maxRemoteMsgBytes)
-		}
-		return string(bts), nil
+		return fetchRemoteMsg(msg)
 	}
-
 	if after, ok := strings.CutPrefix(msg, "file://"); ok {
-		path := after
-		bts, err := os.ReadFile(path)
-		if err != nil {
-			return "", fmt.Errorf("read role file: %w", err)
-		}
-		content := string(bts)
-		if strings.EqualFold(filepath.Ext(path), ".md") {
-			body, parseErr := StripYAMLFrontmatter(content)
-			if parseErr != nil {
-				return "", parseErr
-			}
-			return body, nil
-		}
+		return loadFileMsg(after)
+	}
+	return msg, nil
+}
+
+const maxRemoteMsgBytes = 2 * 1024 * 1024
+
+func fetchRemoteMsg(url string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("fetch role message: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: URL is from user config, intentional fetch of role message
+	if err != nil {
+		return "", fmt.Errorf("fetch role message: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bts, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+		return "", fmt.Errorf("fetch role message: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bts)))
+	}
+	bts, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteMsgBytes))
+	if err != nil {
+		return "", fmt.Errorf("read role message: %w", err)
+	}
+	if len(bts) >= maxRemoteMsgBytes {
+		return "", fmt.Errorf("read role message: response too large (>%d bytes)", maxRemoteMsgBytes)
+	}
+	return string(bts), nil
+}
+
+func loadFileMsg(path string) (string, error) {
+	bts, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read role file: %w", err)
+	}
+	content := string(bts)
+	if !strings.EqualFold(filepath.Ext(path), ".md") {
 		return content, nil
 	}
-
-	return msg, nil
+	body, err := StripYAMLFrontmatter(content)
+	if err != nil {
+		return "", err
+	}
+	return body, nil
 }
 
 // StripYAMLFrontmatter removes YAML frontmatter from markdown content.

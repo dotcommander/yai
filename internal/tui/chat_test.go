@@ -21,7 +21,7 @@ func newTestChat(opts ...func(*Chat)) *Chat {
 			Quiet:      true,
 		},
 	}
-	c := NewChat(context.Background(), r, cfg, nil, nil, nil, "")
+	c := NewChat(context.Background(), r, cfg, nil, nil, nil, nil, "")
 	for _, o := range opts {
 		o(c)
 	}
