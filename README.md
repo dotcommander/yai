@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="yailogo.png" alt="yai" width="400">
+</p>
+
 # yai
 
 yai is a CLI that sends a prompt (and optional stdin) to an LLM and streams the response. Refactored from [charmbracelet/mods](https://github.com/charmbracelet/mods).
