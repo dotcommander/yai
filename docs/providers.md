@@ -43,6 +43,46 @@ Common env vars:
 - `VERCEL_API_KEY`
 - `COHERE_API_KEY`
 
+## Local MLX models
+
+While yai does not have a dedicated "MLX" provider, it fully supports local MLX models via OpenAI-compatible endpoint support.
+
+To use MLX models with yai, serve the model using an OpenAI-compatible server and point yai to it.
+
+### 1. Start the MLX server
+
+Use `mlx-lm.server` to boot an OpenAI-compatible REST API (default port 8080):
+
+```bash
+python -m mlx_lm.server --model mlx-community/Mistral-7B-Instruct-v0.2-4bit
+```
+
+### 2. Configure yai
+
+Add an API entry under `apis:` in your settings file (`yai --settings`):
+
+```yaml
+apis:
+  mlx:
+    base-url: http://localhost:8080/v1
+    api-key: "not-needed"  # Dummy string required by the bridge
+    models:
+      default-model:
+        aliases:
+        - local
+        max-input-chars: 128000
+```
+
+The `openaicompat` bridge handles unknown API names, so it routes to the OpenAI-compatible endpoint automatically.
+
+### 3. Use it
+
+```bash
+git diff | yai --api mlx --model local "Write a commit message for these changes"
+```
+
+To use MLX by default, set `default-api: mlx` and `default-model: local` at the top of your `yai.yml`.
+
 ## Related docs
 
 - Setup and first run: [`docs/setup.md`](setup.md)

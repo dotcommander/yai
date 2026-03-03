@@ -29,7 +29,7 @@ yai --settings            # creates/edits ~/.config/yai/yai.yml
 git status | yai "summarize what changed"
 ```
 
-Docs: [`docs/README.md`](docs/README.md)
+Docs: [`docs/readme.md`](docs/readme.md)
 
 ## Acknowledgments
 

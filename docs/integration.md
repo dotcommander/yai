@@ -62,6 +62,23 @@ yai -f "review this code and propose a safer version" < main.go
 yai -f --format-as markdown "write a PR description" < README.md
 ```
 
+### Generate a patch
+
+`--patch` outputs a unified diff instead of prose. The output is directly applicable via `patch -p0`.
+
+```bash
+# Generate a patch for a single file
+cat main.go | yai --patch "add error handling to the Open call"
+
+# Apply the patch immediately
+cat main.go | yai --patch "add error handling to the Open call" | patch -p0
+
+# Pipe a diff back into yai to explain it
+git diff | yai "explain what changed and why it matters"
+```
+
+`--patch` implies `--raw` and uses the built-in `diff` role. It cannot be combined with `--format` or `--role`.
+
 ### Turn text into JSON
 
 ```bash
