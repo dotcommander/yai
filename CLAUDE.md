@@ -43,7 +43,7 @@ Each LLM provider implements `stream.Client` and `stream.Stream` (defined in `in
 
 | Package | Provider | SDK |
 |---------|----------|-----|
-| `internal/fantasybridge` | OpenAI-compatible + Anthropic + Google + Azure | `charm.land/fantasy` |
+| `internal/provider` | OpenAI-compatible + Anthropic + Google + Azure | `charm.land/fantasy` |
 
 The `internal/proto` package defines the shared `Message`, `Request`, `Chunk`, and `ToolCall` types used across all providers.
 

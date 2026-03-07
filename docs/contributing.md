@@ -19,7 +19,7 @@ golangci-lint run
 
 - CLI entry and flags: `main.go`
 - Bubble Tea model/state machine: `yai.go`
-- Provider bridge (Fantasy routing): `internal/fantasybridge/fantasybridge.go`
+- Provider bridge (Fantasy routing): `internal/provider/client.go`
 - Shared request/response types: `internal/proto/proto.go`
 
 ## Related docs
