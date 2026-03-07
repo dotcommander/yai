@@ -45,11 +45,12 @@ type Chat struct {
 	styles   present.Styles
 	anim     tea.Model
 
-	history      []proto.Message
-	historyBuf   bytes.Buffer // rendered conversation so far
-	streamBuf    bytes.Buffer // current response being streamed
-	activeStream stream.Stream
-	activeCancel context.CancelFunc
+	history         []proto.Message
+	historyBuf      bytes.Buffer // rendered conversation so far
+	renderedHistory string       // Glamour-rendered cache of historyBuf
+	streamBuf       bytes.Buffer // current response being streamed
+	activeStream    stream.Stream
+	activeCancel    context.CancelFunc
 
 	agent         *agent.Service
 	startStreamFn func(context.Context, []proto.Message, string) (agent.StreamStart, error)
@@ -119,6 +120,12 @@ func NewChat(
 				fmt.Fprintf(&c.historyBuf, "> %s\n\n", msg.Content)
 			case proto.RoleAssistant:
 				fmt.Fprintf(&c.historyBuf, "%s\n\n", msg.Content)
+			}
+		}
+		if c.historyBuf.Len() > 0 {
+			rendered, err := gr.Render(c.historyBuf.String())
+			if err == nil {
+				c.renderedHistory = strings.TrimRightFunc(rendered, unicode.IsSpace)
 			}
 		}
 	}
@@ -437,7 +444,7 @@ func (c *Chat) retry(err errs.Error, content string) tea.Msg {
 	if c.retries >= c.cfg.MaxRetries {
 		return err
 	}
-	waitForRetryDelay(c.retries, err.Err)
+	waitForRetryDelay(c.ctx, c.retries, err.Err)
 	return chatSubmitMsg{prompt: content}
 }
 
@@ -446,6 +453,13 @@ func (c *Chat) finishTurn() {
 	if c.streamBuf.Len() > 0 {
 		fmt.Fprintf(&c.historyBuf, "%s\n\n", c.streamBuf.String())
 		c.streamBuf.Reset()
+	}
+	// Cache rendered history so refreshViewport only renders the stream portion.
+	if c.historyBuf.Len() > 0 {
+		rendered, err := c.glam.Render(c.historyBuf.String())
+		if err == nil {
+			c.renderedHistory = strings.TrimRightFunc(rendered, unicode.IsSpace)
+		}
 	}
 	c.dirtyOutput = true
 
@@ -464,16 +478,29 @@ func (c *Chat) closeActiveStream() {
 }
 
 func (c *Chat) refreshViewport() {
-	combined := c.historyBuf.String() + c.streamBuf.String()
-	if combined == "" {
+	if c.historyBuf.Len() == 0 && c.streamBuf.Len() == 0 {
 		return
 	}
 
-	rendered, err := c.glam.Render(combined)
-	if err != nil {
-		rendered = combined
+	var rendered string
+	if c.streamBuf.Len() > 0 {
+		streamRendered, err := c.glam.Render(c.streamBuf.String())
+		if err != nil {
+			streamRendered = c.streamBuf.String()
+		}
+		streamRendered = strings.TrimRightFunc(streamRendered, unicode.IsSpace)
+		if c.renderedHistory != "" {
+			rendered = c.renderedHistory + "\n" + streamRendered
+		} else {
+			rendered = streamRendered
+		}
+	} else {
+		rendered = c.renderedHistory
 	}
-	rendered = strings.TrimRightFunc(rendered, unicode.IsSpace)
+
+	if rendered == "" {
+		return
+	}
 	rendered += "\n"
 
 	truncated := c.renderer.NewStyle().MaxWidth(c.width).Render(rendered)
@@ -487,8 +514,7 @@ func (c *Chat) refreshViewport() {
 }
 
 func (c *Chat) renderTickCmd() tea.Cmd {
-	const renderInterval = 33 * time.Millisecond
-	return tea.Tick(renderInterval, func(time.Time) tea.Msg {
+	return tea.Tick(adaptiveRenderInterval(c.streamBuf.Len()), func(time.Time) tea.Msg {
 		return chatRenderMsg{}
 	})
 }

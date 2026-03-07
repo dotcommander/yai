@@ -279,7 +279,7 @@ func (m *Yai) retry(content string, err errs.Error) tea.Msg {
 	if m.retries >= m.Config.MaxRetries {
 		return err
 	}
-	waitForRetryDelay(m.retries, err.Err)
+	waitForRetryDelay(m.ctx, m.retries, err.Err)
 	return completionInput{content}
 }
 
@@ -397,8 +397,6 @@ func (m *Yai) readStdinCmd() tea.Msg {
 
 const tabWidth = 4
 
-const maxRetainedOutputBytes = 2 * 1024 * 1024
-
 func (m *Yai) closeActiveStream() {
 	closeStream(m.activeStream, m.activeCancel)
 	m.activeStream = nil
@@ -425,10 +423,14 @@ func (m *Yai) appendToOutput(s string) {
 	}
 
 	_, _ = m.outputBuf.WriteString(s)
-	if m.outputBuf.Len() > maxRetainedOutputBytes {
+	maxBytes := int(m.Config.MaxOutputBytes)
+	if maxBytes > 0 && m.outputBuf.Len() > maxBytes {
 		b := m.outputBuf.Bytes()
-		if len(b) > maxRetainedOutputBytes {
-			keep := append([]byte(nil), b[len(b)-maxRetainedOutputBytes:]...)
+		if len(b) > maxBytes {
+			if !m.outputTruncated && !m.Config.Quiet {
+				fmt.Fprintf(os.Stderr, "Warning: output exceeds %d bytes, showing tail only.\n", maxBytes)
+			}
+			keep := append([]byte(nil), b[len(b)-maxBytes:]...)
 			m.outputBuf.Reset()
 			_, _ = m.outputBuf.Write(keep)
 			m.outputTruncated = true
@@ -451,8 +453,7 @@ func (m Yai) shouldRenderFormattedOutput() bool {
 }
 
 func (m *Yai) renderOutputCmd() tea.Cmd {
-	const renderInterval = 33 * time.Millisecond
-	return tea.Tick(renderInterval, func(time.Time) tea.Msg {
+	return tea.Tick(adaptiveRenderInterval(m.outputBuf.Len()), func(time.Time) tea.Msg {
 		return renderOutputMsg{}
 	})
 }
