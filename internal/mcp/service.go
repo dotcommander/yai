@@ -11,8 +11,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"golang.org/x/sync/errgroup"
 
@@ -22,12 +24,49 @@ import (
 
 // Service provides access to MCP server discovery and tool execution.
 type Service struct {
-	cfg *config.Config
+	cfg     *config.Config
+	mu      sync.Mutex
+	clients map[string]*client.Client
 }
 
 // New creates a new MCP service.
 func New(cfg *config.Config) *Service {
-	return &Service{cfg: cfg}
+	return &Service{cfg: cfg, clients: map[string]*client.Client{}}
+}
+
+// getClient returns a cached client for the named server, creating one if needed.
+func (s *Service) getClient(ctx context.Context, name string, server config.MCPServerConfig) (*client.Client, error) {
+	s.mu.Lock()
+	if cli, ok := s.clients[name]; ok {
+		s.mu.Unlock()
+		return cli, nil
+	}
+	s.mu.Unlock()
+
+	cli, err := initClient(ctx, s.cfg, server)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if existing, ok := s.clients[name]; ok {
+		s.mu.Unlock()
+		cli.Close() //nolint:errcheck
+		return existing, nil
+	}
+	s.clients[name] = cli
+	s.mu.Unlock()
+	return cli, nil
+}
+
+// Close shuts down all cached MCP clients.
+func (s *Service) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name, cli := range s.clients {
+		cli.Close() //nolint:errcheck
+		delete(s.clients, name)
+	}
 }
 
 // IsEnabled reports whether the named MCP server is enabled.
@@ -59,7 +98,7 @@ func (s *Service) Tools(ctx context.Context) (map[string][]mcp.Tool, error) {
 	result := map[string][]mcp.Tool{}
 	for sname, server := range s.EnabledServers() {
 		wg.Go(func() error {
-			serverTools, err := toolsFor(ctx, s.cfg, sname, server)
+			serverTools, err := s.toolsFor(ctx, sname, server)
 			if errors.Is(err, context.DeadlineExceeded) {
 				return errs.Wrap(
 					fmt.Errorf("timeout while listing tools for %q - make sure the configuration is correct. If your server requires a docker container, make sure it's running", sname),
@@ -95,11 +134,10 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 	if !s.IsEnabled(sname) {
 		return "", fmt.Errorf("mcp: server is disabled: %q", sname)
 	}
-	cli, err := initClient(ctx, s.cfg, server)
+	cli, err := s.getClient(ctx, sname, server)
 	if err != nil {
 		return "", fmt.Errorf("mcp: %w", err)
 	}
-	defer cli.Close() //nolint:errcheck
 
 	var args map[string]any
 	if len(data) > 0 {
@@ -116,11 +154,32 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 		return "", fmt.Errorf("mcp: %w", err)
 	}
 
+	const maxToolResultBytes = 128 * 1024
+	const truncMsg = "\n\n[output truncated at 128 KiB]"
+
 	var sb strings.Builder
 	for _, content := range result.Content {
+		if sb.Len() >= maxToolResultBytes {
+			break
+		}
 		switch content := content.(type) {
 		case mcp.TextContent:
-			sb.WriteString(content.Text)
+			remaining := maxToolResultBytes - sb.Len()
+			if len(content.Text) > remaining {
+				// Don't split mid-rune: back up to last valid rune boundary.
+				truncated := content.Text[:remaining]
+				for len(truncated) > 0 {
+					r, _ := utf8.DecodeLastRuneInString(truncated)
+					if r != utf8.RuneError {
+						break
+					}
+					truncated = truncated[:len(truncated)-1]
+				}
+				sb.WriteString(truncated)
+				sb.WriteString(truncMsg)
+			} else {
+				sb.WriteString(content.Text)
+			}
 		default:
 			sb.WriteString("[Non-text content]")
 		}
@@ -132,6 +191,9 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 	return sb.String(), nil
 }
 
+// initClient creates and initializes an MCP client for the given server config.
+// For stdio servers, the parent process environment is inherited by default
+// (merged with any explicit server.Env entries) unless MCPNoInheritEnv is set.
 func initClient(ctx context.Context, cfg *config.Config, server config.MCPServerConfig) (*client.Client, error) {
 	var cli *client.Client
 	var err error
@@ -148,9 +210,17 @@ func initClient(ctx context.Context, cfg *config.Config, server config.MCPServer
 			server.Args...,
 		)
 	case "sse":
-		cli, err = client.NewSSEMCPClient(server.URL)
+		var sseOpts []transport.ClientOption
+		if len(server.Headers) > 0 {
+			sseOpts = append(sseOpts, transport.WithHeaders(server.Headers))
+		}
+		cli, err = client.NewSSEMCPClient(server.URL, sseOpts...)
 	case "http":
-		cli, err = client.NewStreamableHttpClient(server.URL)
+		var httpOpts []transport.StreamableHTTPCOption
+		if len(server.Headers) > 0 {
+			httpOpts = append(httpOpts, transport.WithHTTPHeaders(server.Headers))
+		}
+		cli, err = client.NewStreamableHttpClient(server.URL, httpOpts...)
 	default:
 		return nil, fmt.Errorf("unsupported MCP server type: %q, supported types are: stdio, sse, http", server.Type)
 	}
@@ -172,12 +242,11 @@ func initClient(ctx context.Context, cfg *config.Config, server config.MCPServer
 	return cli, nil
 }
 
-func toolsFor(ctx context.Context, cfg *config.Config, name string, server config.MCPServerConfig) ([]mcp.Tool, error) {
-	cli, err := initClient(ctx, cfg, server)
+func (s *Service) toolsFor(ctx context.Context, name string, server config.MCPServerConfig) ([]mcp.Tool, error) {
+	cli, err := s.getClient(ctx, name, server)
 	if err != nil {
 		return nil, fmt.Errorf("could not setup %s: %w", name, err)
 	}
-	defer cli.Close() //nolint:errcheck
 
 	tools, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {

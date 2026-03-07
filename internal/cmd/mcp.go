@@ -66,6 +66,7 @@ func mcpList(cfg *config.Config) {
 
 func mcpListTools(ctx context.Context, cfg *config.Config) error {
 	svc := imcp.New(cfg)
+	defer svc.Close()
 	servers, err := svc.Tools(ctx)
 	if err != nil {
 		return fmt.Errorf("mcp list tools: %w", err)
