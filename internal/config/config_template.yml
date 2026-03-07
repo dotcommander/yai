@@ -10,6 +10,11 @@ format-text:
   markdown: '{{ index .Config.FormatText "markdown" }}'
   json: '{{ index .Config.FormatText "json" }}'
 
+# MCP (Model Context Protocol) server configuration.
+# Servers listed here have their tools discovered and made available to LLMs.
+# By default, MCP tools are disabled for piped/non-interactive input (use
+# mcp-allow-non-tty: true to override). Stdio servers inherit the parent
+# process environment unless mcp-no-inherit-env: true is set.
 mcp-servers: null
 mcp-timeout: 15s
 
@@ -36,6 +41,7 @@ status-text: Generating
 theme: charm
 
 max-input-chars: 12250
+max-output-bytes: 2097152
 max-completion-tokens: 0
 
 apis:

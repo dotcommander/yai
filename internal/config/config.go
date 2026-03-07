@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -104,6 +105,7 @@ type Settings struct {
 	MaxTokens           int64               `yaml:"max-tokens" env:"MAX_TOKENS"`
 	MaxCompletionTokens int64               `yaml:"max-completion-tokens" env:"MAX_COMPLETION_TOKENS"`
 	MaxInputChars       int64               `yaml:"max-input-chars" env:"MAX_INPUT_CHARS"`
+	MaxOutputBytes      int64               `yaml:"max-output-bytes" env:"MAX_OUTPUT_BYTES"`
 	Temperature         float64             `yaml:"temp" env:"TEMP"`
 	Stop                []string            `yaml:"stop" env:"STOP"`
 	TopP                float64             `yaml:"topp" env:"TOPP"`
@@ -173,11 +175,12 @@ type Config struct {
 
 // MCPServerConfig holds configuration for an MCP server.
 type MCPServerConfig struct {
-	Type    string   `yaml:"type"`
-	Command string   `yaml:"command"`
-	Env     []string `yaml:"env"`
-	Args    []string `yaml:"args"`
-	URL     string   `yaml:"url"`
+	Type    string            `yaml:"type"`
+	Command string            `yaml:"command"`
+	Env     []string          `yaml:"env"`
+	Args    []string          `yaml:"args"`
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers"`
 }
 
 // Ensure loads settings from disk and environment and applies defaults.
@@ -205,7 +208,9 @@ func Ensure() (Config, error) {
 	if err != nil {
 		return c, errs.Wrap(err, "Could not read settings file.")
 	}
-	if err := yaml.Unmarshal(content, &c); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(content))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
 		return c, errs.Wrap(err, "Could not parse settings file.")
 	}
 
@@ -229,6 +234,10 @@ func Ensure() (Config, error) {
 		return c, errs.Wrap(err, "Could not create cache directory.")
 	}
 
+	if c.MaxOutputBytes == 0 {
+		c.MaxOutputBytes = 2 * 1024 * 1024
+	}
+
 	if c.WordWrap == 0 {
 		c.WordWrap = 80
 	}
@@ -245,6 +254,9 @@ func Ensure() (Config, error) {
 	// request-timeout:
 	// - 0 means use default
 	// - negative means disable (handled by callers by only applying when > 0)
+	if c.RequestTimeout < 0 && !c.Quiet {
+		fmt.Fprintln(os.Stderr, "Note: request-timeout is negative; request timeout is disabled.")
+	}
 	if c.RequestTimeout == 0 {
 		c.RequestTimeout = Default().RequestTimeout
 	}
