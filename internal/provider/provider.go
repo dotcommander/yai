@@ -1,5 +1,3 @@
-//go:build !yai_small
-
 package fantasybridge
 
 import (

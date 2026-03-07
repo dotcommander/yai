@@ -53,10 +53,15 @@ func TestFromMCPTools(t *testing.T) {
 				Name:        "search",
 				Description: "search docs",
 				InputSchema: mcp.ToolInputSchema{
+					Type: "object",
 					Properties: map[string]any{
 						"query": map[string]any{"type": "string"},
 					},
 					Required: []string{"query"},
+					Defs: map[string]any{
+						"op": map[string]any{"type": "string", "enum": []string{"eq", "ne"}},
+					},
+					AdditionalProperties: false,
 				},
 			},
 		},
@@ -69,4 +74,26 @@ func TestFromMCPTools(t *testing.T) {
 	require.Equal(t, "search docs", fn.Description)
 	require.Equal(t, "object", fn.InputSchema["type"])
 	require.Equal(t, []string{"query"}, fn.InputSchema["required"])
+	require.Equal(t, map[string]any{
+		"op": map[string]any{"type": "string", "enum": []string{"eq", "ne"}},
+	}, fn.InputSchema["$defs"])
+	require.Equal(t, false, fn.InputSchema["additionalProperties"])
+}
+
+func TestFromMCPTools_DefaultsTypeToObject(t *testing.T) {
+	tools := fromMCPTools(map[string][]mcp.Tool{
+		"srv": {
+			{
+				Name: "ping",
+				InputSchema: mcp.ToolInputSchema{
+					Properties: map[string]any{"msg": map[string]any{"type": "string"}},
+				},
+			},
+		},
+	})
+
+	require.Len(t, tools, 1)
+	fn, ok := tools[0].(fantasy.FunctionTool)
+	require.True(t, ok)
+	require.Equal(t, "object", fn.InputSchema["type"], "empty Type should default to object")
 }

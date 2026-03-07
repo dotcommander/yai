@@ -5,3 +5,6 @@ manpages/
 dist/
 .work/
 plan.md
+*_REPORT.md
+AUDIT.md
+REVIEW.md

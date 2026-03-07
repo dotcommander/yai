@@ -79,11 +79,22 @@ func fromMCPTools(mcps map[string][]mcp.Tool) []fantasy.Tool {
 	for serverName, serverTools := range mcps {
 		for _, tool := range serverTools {
 			inputSchema := map[string]any{
-				"type":       "object",
-				"properties": tool.InputSchema.Properties,
+				"type": tool.InputSchema.Type,
+			}
+			if inputSchema["type"] == "" {
+				inputSchema["type"] = "object"
+			}
+			if len(tool.InputSchema.Properties) > 0 {
+				inputSchema["properties"] = tool.InputSchema.Properties
 			}
 			if len(tool.InputSchema.Required) > 0 {
 				inputSchema["required"] = tool.InputSchema.Required
+			}
+			if len(tool.InputSchema.Defs) > 0 {
+				inputSchema["$defs"] = tool.InputSchema.Defs
+			}
+			if tool.InputSchema.AdditionalProperties != nil {
+				inputSchema["additionalProperties"] = tool.InputSchema.AdditionalProperties
 			}
 
 			tools = append(tools, fantasy.FunctionTool{
