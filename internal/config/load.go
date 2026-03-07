@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,9 +23,9 @@ import (
 //   - file:// paths
 //
 // For markdown files loaded via file://, YAML frontmatter is stripped.
-func LoadMsg(msg string) (string, error) {
+func LoadMsg(msg string, httpProxy string) (string, error) {
 	if strings.HasPrefix(msg, "https://") || strings.HasPrefix(msg, "http://") {
-		return fetchRemoteMsg(msg)
+		return fetchRemoteMsg(msg, httpProxy)
 	}
 	if after, ok := strings.CutPrefix(msg, "file://"); ok {
 		return loadFileMsg(after)
@@ -33,15 +35,31 @@ func LoadMsg(msg string) (string, error) {
 
 const maxRemoteMsgBytes = 2 * 1024 * 1024
 
-func fetchRemoteMsg(url string) (string, error) {
+func fetchRemoteMsg(rawURL string, httpProxy string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("fetch role message: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: URL is from user config, intentional fetch of role message
+
+	base, _ := http.DefaultTransport.(*http.Transport)
+	tr := base.Clone()
+	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	tr.TLSHandshakeTimeout = 10 * time.Second
+	tr.ResponseHeaderTimeout = 30 * time.Second
+	tr.IdleConnTimeout = 90 * time.Second
+	tr.ExpectContinueTimeout = 1 * time.Second
+	if httpProxy != "" {
+		proxyURL, pErr := url.Parse(httpProxy)
+		if pErr != nil {
+			return "", fmt.Errorf("fetch role message: parse proxy: %w", pErr)
+		}
+		tr.Proxy = http.ProxyURL(proxyURL)
+	}
+	httpClient := &http.Client{Transport: tr}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch role message: %w", err)
 	}
@@ -99,6 +117,7 @@ func StripYAMLFrontmatter(content string) (string, error) {
 	}
 
 	frontmatter := strings.Join(lines[1:end], "\n")
+	// Permissive unmarshal: frontmatter keys are discarded, only structure is validated.
 	var parsed map[string]any
 	if err := yaml.Unmarshal([]byte(frontmatter), &parsed); err != nil {
 		return "", fmt.Errorf("invalid markdown frontmatter: %w", err)

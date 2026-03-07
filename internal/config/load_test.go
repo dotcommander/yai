@@ -12,7 +12,7 @@ func TestLoadMsg(t *testing.T) {
 	const content = "just text"
 
 	t.Run("normal msg", func(t *testing.T) {
-		msg, err := LoadMsg(content)
+		msg, err := LoadMsg(content, "")
 		require.NoError(t, err)
 		require.Equal(t, content, msg)
 	})
@@ -21,7 +21,7 @@ func TestLoadMsg(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "foo.txt")
 		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-		msg, err := LoadMsg("file://" + path)
+		msg, err := LoadMsg("file://"+path, "")
 		require.NoError(t, err)
 		require.Equal(t, content, msg)
 	})
@@ -31,7 +31,7 @@ func TestLoadMsg(t *testing.T) {
 		md := "---\nname: helper\nstyle: calm\n---\nYou are concise and direct.\n"
 		require.NoError(t, os.WriteFile(path, []byte(md), 0o644))
 
-		msg, err := LoadMsg("file://" + path)
+		msg, err := LoadMsg("file://"+path, "")
 		require.NoError(t, err)
 		require.Equal(t, "You are concise and direct.\n", msg)
 	})
@@ -41,7 +41,7 @@ func TestLoadMsg(t *testing.T) {
 		md := "---\nname: [broken\n---\ncontent"
 		require.NoError(t, os.WriteFile(path, []byte(md), 0o644))
 
-		_, err := LoadMsg("file://" + path)
+		_, err := LoadMsg("file://"+path, "")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid markdown frontmatter")
 	})
