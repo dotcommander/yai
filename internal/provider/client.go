@@ -1,4 +1,4 @@
-package fantasybridge
+package provider
 
 import (
 	"context"

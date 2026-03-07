@@ -8,10 +8,10 @@ import (
 
 	"github.com/dotcommander/yai/internal/config"
 	"github.com/dotcommander/yai/internal/errs"
-	"github.com/dotcommander/yai/internal/fantasybridge"
 	"github.com/dotcommander/yai/internal/mcp"
 	"github.com/dotcommander/yai/internal/present"
 	"github.com/dotcommander/yai/internal/proto"
+	"github.com/dotcommander/yai/internal/provider"
 	"github.com/dotcommander/yai/internal/requestbuilder"
 	"github.com/dotcommander/yai/internal/storage/cache"
 	"github.com/dotcommander/yai/internal/stream"
@@ -19,7 +19,7 @@ import (
 
 // ClientFactory creates a stream.Client from a provider configuration.
 // It allows tests to replace the real Fantasy bridge with a stub.
-type ClientFactory func(fantasybridge.Config) (stream.Client, error)
+type ClientFactory func(provider.Config) (stream.Client, error)
 
 // Service is the core orchestration layer for starting LLM streams.
 //
@@ -83,7 +83,7 @@ func (s *Service) StreamFromPrepared(ctx context.Context, prepared PreparedStrea
 	return s.startStream(ctx, prepared.Request, prepared.Model, prepared.Provider)
 }
 
-func (s *Service) startStream(ctx context.Context, req proto.Request, mod config.Model, providerCfg fantasybridge.Config) (StreamStart, error) {
+func (s *Service) startStream(ctx context.Context, req proto.Request, mod config.Model, providerCfg provider.Config) (StreamStart, error) {
 	cfg := s.cfg
 
 	toolsEnabled := cfg.MCPAllowNonTTY || present.IsInputTTY()
@@ -117,20 +117,21 @@ func (s *Service) startStream(ctx context.Context, req proto.Request, mod config
 	return StreamStart{Stream: st, Model: mod, Messages: req.Messages}, nil
 }
 
-// ApplyProxyConfig configures the provider HTTP client to use an HTTP proxy.
-func ApplyProxyConfig(httpProxy string, providerCfg *fantasybridge.Config) error {
-	if err := requestbuilder.ApplyProxyConfig(httpProxy, providerCfg); err != nil {
-		return fmt.Errorf("apply proxy config: %w", err)
+// ApplyHTTPConfig configures the provider HTTP client with hardened transport
+// timeouts and an optional HTTP proxy.
+func ApplyHTTPConfig(httpProxy string, providerCfg *provider.Config) error {
+	if err := requestbuilder.ApplyHTTPConfig(httpProxy, providerCfg); err != nil {
+		return fmt.Errorf("apply http config: %w", err)
 	}
 	return nil
 }
 
 // NewFantasyClient creates the fantasy bridge client.
-func NewFantasyClient(cfg fantasybridge.Config) (stream.Client, error) {
+func NewFantasyClient(cfg provider.Config) (stream.Client, error) {
 	if cfg.API == "" {
 		return nil, errs.Error{Reason: "missing fantasy provider configuration"}
 	}
-	client, err := fantasybridge.New(cfg)
+	client, err := provider.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("new fantasy bridge client: %w", err)
 	}

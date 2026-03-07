@@ -1,5 +1,5 @@
-// Package fantasybridge converts yai protocol messages to/from Fantasy types.
-package fantasybridge
+// Package provider converts yai protocol messages to/from Fantasy types.
+package provider
 
 import (
 	"errors"

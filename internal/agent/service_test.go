@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/dotcommander/yai/internal/config"
-	"github.com/dotcommander/yai/internal/fantasybridge"
+	"github.com/dotcommander/yai/internal/provider"
 	"github.com/dotcommander/yai/internal/proto"
 	"github.com/dotcommander/yai/internal/stream"
 	"github.com/stretchr/testify/require"
@@ -14,21 +14,21 @@ import (
 func TestNewFantasyClientRouting(t *testing.T) {
 	t.Run("azure-ad returns fantasy client", func(t *testing.T) {
 		client, err := NewFantasyClient(
-			fantasybridge.Config{API: "azure", APIKey: "token", BaseURL: "https://example.openai.azure.com"},
+			provider.Config{API: "azure", APIKey: "token", BaseURL: "https://example.openai.azure.com"},
 		)
 		require.NoError(t, err)
 		require.NotNil(t, client)
 	})
 
 	t.Run("supported core provider returns fantasy client", func(t *testing.T) {
-		client, err := NewFantasyClient(fantasybridge.Config{API: "openai"})
+		client, err := NewFantasyClient(provider.Config{API: "openai"})
 		require.NoError(t, err)
 		require.NotNil(t, client)
 	})
 
 	t.Run("openai-compatible custom api returns fantasy client", func(t *testing.T) {
 		client, err := NewFantasyClient(
-			fantasybridge.Config{API: "deepseek", BaseURL: "https://api.deepseek.com"},
+			provider.Config{API: "deepseek", BaseURL: "https://api.deepseek.com"},
 		)
 		require.NoError(t, err)
 		require.NotNil(t, client)
@@ -36,7 +36,7 @@ func TestNewFantasyClientRouting(t *testing.T) {
 
 	t.Run("cohere returns fantasy client", func(t *testing.T) {
 		client, err := NewFantasyClient(
-			fantasybridge.Config{API: "cohere", APIKey: "token", BaseURL: "https://api.cohere.com/v1"},
+			provider.Config{API: "cohere", APIKey: "token", BaseURL: "https://api.cohere.com/v1"},
 		)
 		require.NoError(t, err)
 		require.NotNil(t, client)
@@ -44,7 +44,7 @@ func TestNewFantasyClientRouting(t *testing.T) {
 
 	t.Run("openrouter returns fantasy client", func(t *testing.T) {
 		client, err := NewFantasyClient(
-			fantasybridge.Config{API: "openrouter", APIKey: "token"},
+			provider.Config{API: "openrouter", APIKey: "token"},
 		)
 		require.NoError(t, err)
 		require.NotNil(t, client)
@@ -52,7 +52,7 @@ func TestNewFantasyClientRouting(t *testing.T) {
 
 	t.Run("vercel returns fantasy client", func(t *testing.T) {
 		client, err := NewFantasyClient(
-			fantasybridge.Config{API: "vercel", APIKey: "token"},
+			provider.Config{API: "vercel", APIKey: "token"},
 		)
 		require.NoError(t, err)
 		require.NotNil(t, client)
@@ -60,22 +60,22 @@ func TestNewFantasyClientRouting(t *testing.T) {
 
 	t.Run("ollama returns fantasy client without api key", func(t *testing.T) {
 		client, err := NewFantasyClient(
-			fantasybridge.Config{API: "ollama", BaseURL: "http://localhost:11434/v1"},
+			provider.Config{API: "ollama", BaseURL: "http://localhost:11434/v1"},
 		)
 		require.NoError(t, err)
 		require.NotNil(t, client)
 	})
 
 	t.Run("missing provider config returns error", func(t *testing.T) {
-		client, err := NewFantasyClient(fantasybridge.Config{})
+		client, err := NewFantasyClient(provider.Config{})
 		require.Error(t, err)
 		require.Nil(t, client)
 	})
 }
 
-func TestApplyProxyConfigIncludesFantasyClient(t *testing.T) {
-	providerCfg := fantasybridge.Config{}
-	err := ApplyProxyConfig("http://127.0.0.1:8080", &providerCfg)
+func TestApplyHTTPConfigIncludesFantasyClient(t *testing.T) {
+	providerCfg := provider.Config{}
+	err := ApplyHTTPConfig("http://127.0.0.1:8080", &providerCfg)
 	require.NoError(t, err)
 	require.NotNil(t, providerCfg.HTTPClient)
 }
@@ -90,7 +90,7 @@ func TestNewWithClientFactory(t *testing.T) {
 
 	t.Run("New() with custom factory uses that factory", func(t *testing.T) {
 		cfg := &config.Config{}
-		customFactory := func(fantasybridge.Config) (stream.Client, error) {
+		customFactory := func(provider.Config) (stream.Client, error) {
 			return &stubClient{}, nil
 		}
 		svc := New(cfg, nil, nil, customFactory)
@@ -100,7 +100,7 @@ func TestNewWithClientFactory(t *testing.T) {
 
 	t.Run("Stream() calls the injected factory", func(t *testing.T) {
 		factoryCalled := false
-		customFactory := func(fantasybridge.Config) (stream.Client, error) {
+		customFactory := func(provider.Config) (stream.Client, error) {
 			factoryCalled = true
 			return &stubClient{}, nil
 		}
@@ -150,7 +150,7 @@ func TestStreamReasoningModelDropsSamplingSettings(t *testing.T) {
 			},
 		}
 
-		svc := New(cfg, nil, nil, func(fantasybridge.Config) (stream.Client, error) {
+		svc := New(cfg, nil, nil, func(provider.Config) (stream.Client, error) {
 			return capture, nil
 		})
 
@@ -183,7 +183,7 @@ func TestStreamReasoningModelDropsSamplingSettings(t *testing.T) {
 			},
 		}
 
-		svc := New(cfg, nil, nil, func(fantasybridge.Config) (stream.Client, error) {
+		svc := New(cfg, nil, nil, func(provider.Config) (stream.Client, error) {
 			return capture, nil
 		})
 

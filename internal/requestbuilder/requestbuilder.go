@@ -14,11 +14,10 @@ import (
 	"time"
 
 	"github.com/caarlos0/go-shellwords"
-
 	"github.com/dotcommander/yai/internal/config"
 	"github.com/dotcommander/yai/internal/errs"
-	"github.com/dotcommander/yai/internal/fantasybridge"
 	"github.com/dotcommander/yai/internal/proto"
+	"github.com/dotcommander/yai/internal/provider"
 	"github.com/dotcommander/yai/internal/storage/cache"
 )
 
@@ -27,7 +26,7 @@ import (
 // This keeps request/model/provider assembly distinct from stream execution.
 type PreparedStream struct {
 	Model    config.Model
-	Provider fantasybridge.Config
+	Provider provider.Config
 	Request  proto.Request
 }
 
@@ -85,7 +84,7 @@ func BuildPreparedFromPrompt(
 	if err != nil {
 		return PreparedStream{}, err
 	}
-	if err := ApplyProxyConfig(cfg.HTTPProxy, &providerCfg); err != nil {
+	if err := ApplyHTTPConfig(cfg.HTTPProxy, &providerCfg); err != nil {
 		return PreparedStream{}, err
 	}
 
@@ -118,7 +117,7 @@ func BuildPreparedFromHistory(
 	if err != nil {
 		return PreparedStream{}, err
 	}
-	if err := ApplyProxyConfig(cfg.HTTPProxy, &providerCfg); err != nil {
+	if err := ApplyHTTPConfig(cfg.HTTPProxy, &providerCfg); err != nil {
 		return PreparedStream{}, err
 	}
 
@@ -134,43 +133,43 @@ func BuildPreparedFromHistory(
 	}, nil
 }
 
-// PrepareProviderConfig builds the fantasybridge config for the selected model/API.
-func PrepareProviderConfig(ctx context.Context, mod config.Model, api config.API, cfg *config.Config) (fantasybridge.Config, error) {
+// PrepareProviderConfig builds the provider config for the selected model/API.
+func PrepareProviderConfig(ctx context.Context, mod config.Model, api config.API, cfg *config.Config) (provider.Config, error) {
 	switch mod.API {
 	case "openrouter":
 		key, err := ensureKey(ctx, api, "OPENROUTER_API_KEY", "https://openrouter.ai/keys")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Wrap(err, "OpenRouter authentication failed")
+			return provider.Config{}, errs.Wrap(err, "OpenRouter authentication failed")
 		}
-		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
+		return provider.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "vercel":
 		key, err := ensureKey(ctx, api, "VERCEL_API_KEY", "https://vercel.com/dashboard/tokens")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Wrap(err, "Vercel AI Gateway authentication failed")
+			return provider.Config{}, errs.Wrap(err, "Vercel AI Gateway authentication failed")
 		}
-		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
+		return provider.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "bedrock":
 		key, err := optionalKey(ctx, api)
 		if err != nil {
-			return fantasybridge.Config{}, errs.Wrap(err, "Bedrock authentication failed")
+			return provider.Config{}, errs.Wrap(err, "Bedrock authentication failed")
 		}
-		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
+		return provider.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "cohere":
 		key, err := ensureKey(ctx, api, "COHERE_API_KEY", "https://dashboard.cohere.com/api-keys")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Wrap(err, "Cohere authentication failed")
+			return provider.Config{}, errs.Wrap(err, "Cohere authentication failed")
 		}
-		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
+		return provider.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "ollama":
 		baseURL := api.BaseURL
 		if baseURL == "" {
 			baseURL = "http://localhost:11434/v1"
 		}
-		return fantasybridge.Config{API: mod.API, BaseURL: baseURL}, nil
+		return provider.Config{API: mod.API, BaseURL: baseURL}, nil
 	case "azure", "azure-ad":
 		key, err := ensureKey(ctx, api, "AZURE_OPENAI_KEY", "https://aka.ms/oai/access")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Wrap(err, "Azure authentication failed")
+			return provider.Config{}, errs.Wrap(err, "Azure authentication failed")
 		}
 		providerAPI := mod.API
 		if mod.API == "azure-ad" {
@@ -179,48 +178,51 @@ func PrepareProviderConfig(ctx context.Context, mod config.Model, api config.API
 		if api.User != "" {
 			cfg.User = api.User
 		}
-		return fantasybridge.Config{API: providerAPI, APIKey: key, BaseURL: api.BaseURL}, nil
+		return provider.Config{API: providerAPI, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "anthropic":
 		key, err := ensureKey(ctx, api, "ANTHROPIC_API_KEY", "https://console.anthropic.com/settings/keys")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Wrap(err, "Anthropic authentication failed")
+			return provider.Config{}, errs.Wrap(err, "Anthropic authentication failed")
 		}
-		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
+		return provider.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	case "google":
 		key, err := ensureKey(ctx, api, "GOOGLE_API_KEY", "https://aistudio.google.com/app/apikey")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Wrap(err, "Google authentication failed")
+			return provider.Config{}, errs.Wrap(err, "Google authentication failed")
 		}
-		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL, ThinkingBudget: mod.ThinkingBudget}, nil
+		return provider.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL, ThinkingBudget: mod.ThinkingBudget}, nil
 	default:
 		key, err := ensureKey(ctx, api, "OPENAI_API_KEY", "https://platform.openai.com/account/api-keys")
 		if err != nil {
-			return fantasybridge.Config{}, errs.Wrap(err, "OpenAI authentication failed")
+			return provider.Config{}, errs.Wrap(err, "OpenAI authentication failed")
 		}
-		return fantasybridge.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
+		return provider.Config{API: mod.API, APIKey: key, BaseURL: api.BaseURL}, nil
 	}
 }
 
-// ApplyProxyConfig configures the provider HTTP client to use an HTTP proxy.
-func ApplyProxyConfig(httpProxy string, providerCfg *fantasybridge.Config) error {
-	if httpProxy == "" {
-		return nil
-	}
-	proxyURL, err := url.Parse(httpProxy)
-	if err != nil {
-		return errs.Wrap(err, "There was an error parsing your proxy URL.")
-	}
+// ApplyHTTPConfig configures the provider HTTP client with hardened transport
+// timeouts. When httpProxy is non-empty, the transport is additionally
+// configured to route through the given HTTP proxy.
+func ApplyHTTPConfig(httpProxy string, providerCfg *provider.Config) error {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return errs.Wrap(fmt.Errorf("default transport is not *http.Transport"), "Could not configure proxy.")
+		return errs.Wrap(fmt.Errorf("default transport is not *http.Transport"), "Could not configure HTTP transport.")
 	}
 	tr := base.Clone()
-	tr.Proxy = http.ProxyURL(proxyURL)
 	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	tr.TLSHandshakeTimeout = 10 * time.Second
 	tr.ResponseHeaderTimeout = 30 * time.Second
 	tr.IdleConnTimeout = 90 * time.Second
 	tr.ExpectContinueTimeout = 1 * time.Second
+
+	if httpProxy != "" {
+		proxyURL, err := url.Parse(httpProxy)
+		if err != nil {
+			return errs.Wrap(err, "There was an error parsing your proxy URL.")
+		}
+		tr.Proxy = http.ProxyURL(proxyURL)
+	}
+
 	providerCfg.HTTPClient = &http.Client{Transport: tr}
 	return nil
 }
@@ -266,7 +268,13 @@ func BuildRequestFromHistory(cfg *config.Config, mod config.Model, history []pro
 		return proto.Request{}, err
 	}
 
-	for _, msg := range history {
+	// 75% of the character budget goes to history; the remaining 25% is
+	// reserved for the new prompt and system messages.
+	historyBudget := int64(0)
+	if mod.MaxChars > 0 {
+		historyBudget = mod.MaxChars * 3 / 4
+	}
+	for _, msg := range windowHistory(history, historyBudget) {
 		if msg.Role != proto.RoleSystem {
 			messages = append(messages, msg)
 		}
@@ -284,6 +292,25 @@ func BuildRequestFromHistory(cfg *config.Config, mod config.Model, history []pro
 	return BuildRequest(cfg, mod, messages), nil
 }
 
+func windowHistory(history []proto.Message, budgetChars int64) []proto.Message {
+	if budgetChars <= 0 || len(history) == 0 {
+		return history
+	}
+	var total int64
+	start := len(history)
+	for i := len(history) - 1; i >= 0; i-- {
+		total += int64(len(history[i].Content))
+		if total > budgetChars {
+			break
+		}
+		start = i
+	}
+	if start >= len(history) {
+		start = len(history) - 1
+	}
+	return history[start:]
+}
+
 func buildSystemMessages(cfg *config.Config) ([]proto.Message, error) {
 	messages := make([]proto.Message, 0, 8)
 
@@ -297,7 +324,7 @@ func buildSystemMessages(cfg *config.Config) ([]proto.Message, error) {
 			return nil, errs.Wrap(fmt.Errorf("role %q does not exist", cfg.Role), "Could not use role")
 		}
 		for _, msg := range roleSetup {
-			content, err := config.LoadMsg(msg)
+			content, err := config.LoadMsg(msg, cfg.HTTPProxy)
 			if err != nil {
 				return nil, errs.Wrap(err, "Could not use role")
 			}
