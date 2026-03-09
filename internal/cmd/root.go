@@ -86,150 +86,203 @@ func NewRootCmd(build BuildInfo, cfg config.Config, cfgErr error) *cobra.Command
 func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
 	rt.cfg.Prefix = present.RemoveWhitespace(strings.Join(args, " "))
 
-	if rt.cfg.Patch {
-		if cmd.Flags().Changed("format") {
-			return fmt.Errorf("%w", errs.UserErrorf("--patch and --format cannot be used together"))
-		}
-		if cmd.Flags().Changed("role") {
-			return fmt.Errorf("%w", errs.UserErrorf("--patch and --role cannot be used together"))
-		}
-		rt.cfg.Raw = true
-		rt.cfg.Role = "diff"
-		rt.cfg.Format = false
+	if err := rt.applyPatchMode(cmd); err != nil {
+		return err
+	}
+	if err := rt.maybeLoadPromptFromEditor(); err != nil {
+		return err
+	}
+	if handled, err := rt.runHeadlessMode(cmd, args); handled || err != nil {
+		return err
+	}
+	if err := rt.maybeAskForPromptInfo(); err != nil {
+		return err
 	}
 
-	opts := []tea.ProgramOption{}
+	store, err := rt.prepareGenerateSession()
+	if err != nil {
+		return err
+	}
+	defer store.Close() //nolint:errcheck
 
-	if !present.IsInputTTY() || rt.cfg.Raw {
-		opts = append(opts, tea.WithInput(nil))
+	yai, err := rt.runGenerateProgram(cmd.Context(), rt.programOptions(), store)
+	if err != nil {
+		return err
 	}
-	if present.IsOutputTTY() && !rt.cfg.Raw {
-		opts = append(opts, tea.WithOutput(os.Stderr))
-	} else {
-		opts = append(opts, tea.WithoutRenderer())
+	if err := rt.ensurePromptInput(yai); err != nil {
+		return err
 	}
+	rt.printGenerateOutput(yai)
+	return saveConversation(&rt.cfg, store, yai.Messages())
+}
+
+func (rt *runtime) applyPatchMode(cmd *cobra.Command) error {
+	if !rt.cfg.Patch {
+		return nil
+	}
+	if cmd.Flags().Changed("format") {
+		return fmt.Errorf("%w", errs.UserErrorf("--patch and --format cannot be used together"))
+	}
+	if cmd.Flags().Changed("role") {
+		return fmt.Errorf("%w", errs.UserErrorf("--patch and --role cannot be used together"))
+	}
+	rt.cfg.Raw = true
+	rt.cfg.Role = "diff"
+	rt.cfg.Format = false
+	return nil
+}
+
+func (rt *runtime) programOptions() []tea.ProgramOption {
 	if os.Getenv("VIMRUNTIME") != "" {
 		rt.cfg.Quiet = true
 	}
 
-	if isNoArgs(&rt.cfg) && present.IsInputTTY() && rt.cfg.OpenEditor {
-		prompt, err := prefixFromEditor(rt.cfg.SettingsPath)
-		if err != nil {
-			return err
-		}
-		rt.cfg.Prefix = prompt
+	opts := []tea.ProgramOption{}
+	if !present.IsInputTTY() || rt.cfg.Raw {
+		opts = append(opts, tea.WithInput(nil))
 	}
+	if present.IsOutputTTY() && !rt.cfg.Raw {
+		return append(opts, tea.WithOutput(os.Stderr))
+	}
+	return append(opts, tea.WithoutRenderer())
+}
 
+func (rt *runtime) maybeLoadPromptFromEditor() error {
+	if !isNoArgs(&rt.cfg) || !present.IsInputTTY() || !rt.cfg.OpenEditor {
+		return nil
+	}
+	prompt, err := prefixFromEditor(rt.cfg.SettingsPath)
+	if err != nil {
+		return err
+	}
+	rt.cfg.Prefix = prompt
+	return nil
+}
+
+func (rt *runtime) runHeadlessMode(cmd *cobra.Command, args []string) (bool, error) {
 	// Headless modes (no TUI) still drain stdin to keep pipes predictable.
 	switch {
 	case rt.cfg.ShowHelp:
 		drainStdin()
 		if err := cmd.Usage(); err != nil {
-			return fmt.Errorf("usage: %w", err)
+			return true, fmt.Errorf("usage: %w", err)
 		}
-		return nil
+		return true, nil
 	case rt.cfg.Show != "" || rt.cfg.ShowLast:
 		drainStdin()
-		return showConversation(&rt.cfg)
+		return true, showConversation(&rt.cfg)
 	case rt.cfg.Dirs:
 		drainStdin()
 		printDirs(&rt.cfg, args)
-		return nil
+		return true, nil
 	case rt.cfg.EditSettings:
 		drainStdin()
-		return editSettings(&rt.cfg)
+		return true, editSettings(&rt.cfg)
 	case rt.cfg.ResetSettings:
 		drainStdin()
-		return resetSettings(&rt.cfg)
+		return true, resetSettings(&rt.cfg)
 	case rt.cfg.ListRoles:
 		drainStdin()
 		listRoles(&rt.cfg)
-		return nil
+		return true, nil
 	case rt.cfg.MCPList:
 		drainStdin()
 		mcpList(&rt.cfg)
-		return nil
+		return true, nil
 	case rt.cfg.MCPListTools:
 		drainStdin()
 		ctx, cancel := context.WithTimeout(cmd.Context(), rt.cfg.MCPTimeout)
 		defer cancel()
-		return mcpListTools(ctx, &rt.cfg)
+		return true, mcpListTools(ctx, &rt.cfg)
 	case rt.cfg.List:
 		drainStdin()
-		return listConversations(&rt.cfg, rt.cfg.Raw)
+		return true, listConversations(&rt.cfg, rt.cfg.Raw)
 	case len(rt.cfg.Delete) > 0:
 		drainStdin()
-		return deleteConversations(&rt.cfg, rt.cfg.Delete)
+		return true, deleteConversations(&rt.cfg, rt.cfg.Delete)
 	case rt.cfg.DeleteOlderThan != 0:
 		drainStdin()
-		return deleteConversationsOlderThan(&rt.cfg, rt.cfg.DeleteOlderThan.String())
+		return true, deleteConversationsOlderThan(&rt.cfg, rt.cfg.DeleteOlderThan.String())
+	default:
+		return false, nil
 	}
+}
 
-	if (isNoArgs(&rt.cfg) || rt.cfg.AskModel) && present.IsInputTTY() {
-		if err := askInfo(&rt.cfg); err != nil && err == huh.ErrUserAborted {
-			return errs.Wrap(err, "User canceled.")
-		} else if err != nil {
-			return errs.Wrap(err, "Prompt failed.")
-		}
+func (rt *runtime) maybeAskForPromptInfo() error {
+	if !(isNoArgs(&rt.cfg) || rt.cfg.AskModel) || !present.IsInputTTY() {
+		return nil
 	}
+	if err := askInfo(&rt.cfg); err != nil && err == huh.ErrUserAborted {
+		return errs.Wrap(err, "User canceled.")
+	} else if err != nil {
+		return errs.Wrap(err, "Prompt failed.")
+	}
+	return nil
+}
 
+func (rt *runtime) prepareGenerateSession() (*conversationStore, error) {
 	store, err := openConversationStore(rt.cfg.CachePath)
 	if err != nil {
-		return errs.Wrap(err, "Could not open conversation store.")
+		return nil, errs.Wrap(err, "Could not open conversation store.")
 	}
-	defer store.Close() //nolint:errcheck
 
 	pl, err := planConversation(&rt.cfg, store.DB)
 	if err != nil {
-		return err
+		store.Close() //nolint:errcheck
+		return nil, err
 	}
 	rt.cfg.CacheWriteToID = pl.WriteID
 	rt.cfg.CacheWriteToTitle = pl.Title
 	rt.cfg.CacheReadFromID = pl.ReadID
 	rt.cfg.API = pl.API
 	rt.cfg.Model = pl.Model
+	return store, nil
+}
 
+func (rt *runtime) runGenerateProgram(
+	ctx context.Context,
+	opts []tea.ProgramOption,
+	store *conversationStore,
+) (*tui.Yai, error) {
 	agentSvc := agent.New(&rt.cfg, store.Cache, nil)
 	startStreamFn := makePromptStreamStarter(&rt.cfg, store.Cache, agentSvc)
-	yai := tui.NewYai(cmd.Context(), present.StderrRenderer(), &rt.cfg, agentSvc, startStreamFn)
+	yai := tui.NewYai(ctx, present.StderrRenderer(), &rt.cfg, agentSvc, startStreamFn)
 	p := tea.NewProgram(yai, opts...)
 	m, err := p.Run()
 	if err != nil {
-		return errs.Wrap(err, "Couldn't start Bubble Tea program.")
+		return nil, errs.Wrap(err, "Couldn't start Bubble Tea program.")
 	}
 
 	yai = m.(*tui.Yai)
 	if yai.Error != nil {
-		return *yai.Error
+		return nil, *yai.Error
 	}
+	return yai, nil
+}
 
-	// If we never received any input and nothing was provided, fail.
-	if yai.Input == "" && isNoArgs(&rt.cfg) {
-		return errs.Wrap(
-			errs.UserErrorf(
-				"You can give your prompt as arguments and/or pipe it from STDIN.\nExample: %s",
-				present.StdoutStyles().InlineCode.Render("yai [prompt]"),
-			),
-			"You haven't provided any prompt input.",
-		)
+func (rt *runtime) ensurePromptInput(yai *tui.Yai) error {
+	if yai.Input != "" || !isNoArgs(&rt.cfg) {
+		return nil
 	}
+	return errs.Wrap(
+		errs.UserErrorf(
+			"You can give your prompt as arguments and/or pipe it from STDIN.\nExample: %s",
+			present.StdoutStyles().InlineCode.Render("yai [prompt]"),
+		),
+		"You haven't provided any prompt input.",
+	)
+}
 
-	// raw mode already prints the output, no need to print it again
-	if present.IsOutputTTY() && !rt.cfg.Raw {
-		switch {
-		case yai.GlamourOutput() != "":
-			fmt.Print(yai.GlamourOutput())
-		case yai.Output != "":
-			fmt.Print(yai.Output)
-		}
+func (rt *runtime) printGenerateOutput(yai *tui.Yai) {
+	if !present.IsOutputTTY() || rt.cfg.Raw {
+		return
 	}
-
-	// Don't write back when we're just showing.
-	if err := saveConversation(&rt.cfg, store, yai.Messages()); err != nil {
-		return err
+	switch {
+	case yai.GlamourOutput() != "":
+		fmt.Print(yai.GlamourOutput())
+	case yai.Output != "":
+		fmt.Print(yai.Output)
 	}
-
-	return nil
 }
 
 func showConversation(cfg *config.Config) error {

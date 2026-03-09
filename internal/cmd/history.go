@@ -137,8 +137,9 @@ func selectFromList(conversations []storage.Conversation) {
 		return
 	}
 
-	_ = clipboard.WriteAll(selected)
-	termenv.Copy(selected)
+	if err := copySelectedConversationID(selected); err != nil {
+		fmt.Fprintln(os.Stderr, present.StdoutStyles().Comment.Render("Warning: "+err.Error()))
+	}
 	present.PrintConfirmation("COPIED", selected)
 
 	fmt.Println(present.StdoutStyles().Comment.Render("You can use this conversation ID with the following commands:"))
@@ -150,6 +151,12 @@ func selectFromList(conversations []storage.Conversation) {
 	for _, s := range suggestions {
 		fmt.Printf("  %s\n", present.StdoutStyles().InlineCode.Render(s))
 	}
+}
+
+func copySelectedConversationID(selected string) error {
+	err := clipboard.WriteAll(selected)
+	termenv.Copy(selected)
+	return err
 }
 
 func printList(conversations []storage.Conversation) {

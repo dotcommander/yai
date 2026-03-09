@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,7 +78,9 @@ func saveConversationWithFeedback(cfg *config.Config, store *conversationStore, 
 		return errs.Wrap(err, errReason)
 	}
 	if err := store.DB.Save(id, title, cfg.API, cfg.Model); err != nil {
-		_ = store.Cache.Delete(id)
+		if delErr := store.Cache.Delete(id); delErr != nil {
+			err = errors.Join(err, fmt.Errorf("delete cache after db save failure: %w", delErr))
+		}
 		return errs.Wrap(err, errReason)
 	}
 

@@ -123,7 +123,16 @@ func (rt *runtime) runChat(ctx context.Context, args []string) error {
 		return saveConversationWithFeedback(&rt.cfg, store, msgs, false)
 	}
 
-	chat := tui.NewChat(ctx, present.StderrRenderer(), &rt.cfg, agentSvc, startStreamFn, history, saveFn, initialPrompt)
+	chat := tui.NewChat(tui.ChatOptions{
+		Context:       ctx,
+		Renderer:      present.StderrRenderer(),
+		Config:        &rt.cfg,
+		Agent:         agentSvc,
+		StartStream:   startStreamFn,
+		History:       history,
+		Save:          saveFn,
+		InitialPrompt: initialPrompt,
+	})
 
 	p := tea.NewProgram(chat, tea.WithAltScreen(), tea.WithOutput(os.Stderr))
 	m, err := p.Run()
