@@ -4,14 +4,10 @@ package requestbuilder
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/caarlos0/go-shellwords"
 	"github.com/dotcommander/yai/internal/config"
@@ -75,6 +71,29 @@ func BuildPreparedFromPrompt(
 	cacheStore *cache.Conversations,
 	prompt string,
 ) (PreparedStream, error) {
+	return buildPreparedStream(ctx, cfg, func(mod config.Model) (proto.Request, error) {
+		return BuildRequestFromPrompt(cfg, mod, cacheStore, prompt)
+	})
+}
+
+// BuildPreparedFromHistory resolves provider/model and builds a request using
+// existing conversation history.
+func BuildPreparedFromHistory(
+	ctx context.Context,
+	cfg *config.Config,
+	history []proto.Message,
+	prompt string,
+) (PreparedStream, error) {
+	return buildPreparedStream(ctx, cfg, func(mod config.Model) (proto.Request, error) {
+		return BuildRequestFromHistory(cfg, mod, history, prompt)
+	})
+}
+
+func buildPreparedStream(
+	ctx context.Context,
+	cfg *config.Config,
+	buildRequest func(config.Model) (proto.Request, error),
+) (PreparedStream, error) {
 	api, mod, err := ResolveModel(cfg)
 	if err != nil {
 		return PreparedStream{}, err
@@ -88,49 +107,12 @@ func BuildPreparedFromPrompt(
 		return PreparedStream{}, err
 	}
 
-	req, err := BuildRequestFromPrompt(cfg, mod, cacheStore, prompt)
+	req, err := buildRequest(mod)
 	if err != nil {
 		return PreparedStream{}, err
 	}
 
-	return PreparedStream{
-		Model:    mod,
-		Provider: providerCfg,
-		Request:  req,
-	}, nil
-}
-
-// BuildPreparedFromHistory resolves provider/model and builds a request using
-// existing conversation history.
-func BuildPreparedFromHistory(
-	ctx context.Context,
-	cfg *config.Config,
-	history []proto.Message,
-	prompt string,
-) (PreparedStream, error) {
-	api, resolvedMod, err := ResolveModel(cfg)
-	if err != nil {
-		return PreparedStream{}, err
-	}
-
-	providerCfg, err := PrepareProviderConfig(ctx, resolvedMod, api, cfg)
-	if err != nil {
-		return PreparedStream{}, err
-	}
-	if err := ApplyHTTPConfig(cfg.HTTPProxy, &providerCfg); err != nil {
-		return PreparedStream{}, err
-	}
-
-	req, err := BuildRequestFromHistory(cfg, resolvedMod, history, prompt)
-	if err != nil {
-		return PreparedStream{}, err
-	}
-
-	return PreparedStream{
-		Model:    resolvedMod,
-		Provider: providerCfg,
-		Request:  req,
-	}, nil
+	return PreparedStream{Model: mod, Provider: providerCfg, Request: req}, nil
 }
 
 // PrepareProviderConfig builds the provider config for the selected model/API.
@@ -204,26 +186,14 @@ func PrepareProviderConfig(ctx context.Context, mod config.Model, api config.API
 // timeouts. When httpProxy is non-empty, the transport is additionally
 // configured to route through the given HTTP proxy.
 func ApplyHTTPConfig(httpProxy string, providerCfg *provider.Config) error {
-	base, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return errs.Wrap(fmt.Errorf("default transport is not *http.Transport"), "Could not configure HTTP transport.")
-	}
-	tr := base.Clone()
-	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
-	tr.TLSHandshakeTimeout = 10 * time.Second
-	tr.ResponseHeaderTimeout = 30 * time.Second
-	tr.IdleConnTimeout = 90 * time.Second
-	tr.ExpectContinueTimeout = 1 * time.Second
-
-	if httpProxy != "" {
-		proxyURL, err := url.Parse(httpProxy)
-		if err != nil {
+	httpClient, err := config.NewHTTPClient(httpProxy)
+	if err != nil {
+		if strings.Contains(err.Error(), "parse proxy") {
 			return errs.Wrap(err, "There was an error parsing your proxy URL.")
 		}
-		tr.Proxy = http.ProxyURL(proxyURL)
+		return errs.Wrap(err, "Could not configure HTTP transport.")
 	}
-
-	providerCfg.HTTPClient = &http.Client{Transport: tr}
+	providerCfg.HTTPClient = httpClient
 	return nil
 }
 
@@ -398,20 +368,9 @@ func IsReasoningModel(model string) bool {
 }
 
 func ensureKey(ctx context.Context, api config.API, defaultEnv, docsURL string) (string, error) {
-	key := api.APIKey
-	if key == "" && api.APIKeyEnv != "" && api.APIKeyCmd == "" {
-		key = os.Getenv(api.APIKeyEnv)
-	}
-	if key == "" && api.APIKeyCmd != "" {
-		args, err := shellwords.Parse(api.APIKeyCmd)
-		if err != nil {
-			return "", errs.Wrap(err, "Failed to parse api-key-cmd")
-		}
-		out, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput() //nolint:gosec // G204: api-key-cmd is user-configured in yai.yml, intentional shell command
-		if err != nil {
-			return "", errs.Wrap(err, "Cannot exec api-key-cmd")
-		}
-		key = strings.TrimSpace(string(out))
+	key, err := resolveConfiguredKey(ctx, api)
+	if err != nil {
+		return "", err
 	}
 	if key == "" {
 		key = os.Getenv(defaultEnv)
@@ -426,20 +385,32 @@ func ensureKey(ctx context.Context, api config.API, defaultEnv, docsURL string) 
 }
 
 func optionalKey(ctx context.Context, api config.API) (string, error) {
+	return resolveConfiguredKey(ctx, api)
+}
+
+func resolveConfiguredKey(ctx context.Context, api config.API) (string, error) {
 	key := api.APIKey
 	if key == "" && api.APIKeyEnv != "" && api.APIKeyCmd == "" {
 		key = os.Getenv(api.APIKeyEnv)
 	}
 	if key == "" && api.APIKeyCmd != "" {
-		args, err := shellwords.Parse(api.APIKeyCmd)
+		resolved, err := keyFromCommand(ctx, api.APIKeyCmd)
 		if err != nil {
-			return "", errs.Wrap(err, "Failed to parse api-key-cmd")
+			return "", err
 		}
-		out, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput() //nolint:gosec // G204: api-key-cmd is user-configured in yai.yml, intentional shell command
-		if err != nil {
-			return "", errs.Wrap(err, "Cannot exec api-key-cmd")
-		}
-		key = strings.TrimSpace(string(out))
+		key = resolved
 	}
 	return key, nil
+}
+
+func keyFromCommand(ctx context.Context, cmd string) (string, error) {
+	args, err := shellwords.Parse(cmd)
+	if err != nil {
+		return "", errs.Wrap(err, "Failed to parse api-key-cmd")
+	}
+	out, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput() //nolint:gosec // G204: api-key-cmd is user-configured in yai.yml, intentional shell command
+	if err != nil {
+		return "", errs.Wrap(err, "Cannot exec api-key-cmd")
+	}
+	return strings.TrimSpace(string(out)), nil
 }

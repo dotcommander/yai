@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,21 +42,10 @@ func fetchRemoteMsg(rawURL string, httpProxy string) (string, error) {
 		return "", fmt.Errorf("fetch role message: %w", err)
 	}
 
-	base, _ := http.DefaultTransport.(*http.Transport)
-	tr := base.Clone()
-	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
-	tr.TLSHandshakeTimeout = 10 * time.Second
-	tr.ResponseHeaderTimeout = 30 * time.Second
-	tr.IdleConnTimeout = 90 * time.Second
-	tr.ExpectContinueTimeout = 1 * time.Second
-	if httpProxy != "" {
-		proxyURL, pErr := url.Parse(httpProxy)
-		if pErr != nil {
-			return "", fmt.Errorf("fetch role message: parse proxy: %w", pErr)
-		}
-		tr.Proxy = http.ProxyURL(proxyURL)
+	httpClient, err := NewHTTPClient(httpProxy)
+	if err != nil {
+		return "", fmt.Errorf("fetch role message: %w", err)
 	}
-	httpClient := &http.Client{Transport: tr}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch role message: %w", err)
