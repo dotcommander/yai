@@ -7,19 +7,9 @@ import (
 )
 
 func (m *Yai) handleStreamError(err error, mod config.Model, prompt string) tea.Msg {
-	action := m.agent.ActionForStreamError(err, mod, prompt, m.Config.NoLimit)
-	if action.ModelOverride != "" {
-		m.Config.Model = action.ModelOverride
-	}
-	if action.Retry {
-		next := action.Prompt
-		if next == "" {
-			next = prompt
-		}
-		return m.retry(next, action.Err)
-	}
-	if action.Err.Err == nil {
-		return errs.Error{Err: err}
-	}
-	return action.Err
+	return handleRetryableStreamError(m.agent, m.Config.NoLimit, func(model string) {
+		m.Config.Model = model
+	}, func(retryErr errs.Error, next string) tea.Msg {
+		return m.retry(next, retryErr)
+	}, err, mod, prompt)
 }

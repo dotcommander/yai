@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -292,87 +291,46 @@ func (m *Yai) startCompletionCmd(content string) tea.Cmd {
 			return errs.Error{Reason: "Stream starter is not available"}
 		}
 		m.streamStartedAt = time.Now()
-		m.closeActiveStream()
-		ctx := m.ctx
-		if m.Config.RequestTimeout > 0 {
-			cctx, cancel := context.WithTimeout(m.ctx, m.Config.RequestTimeout)
-			ctx = cctx
-			m.activeCancel = cancel
-		}
-		res, err := m.startStreamFn(ctx, content)
+		res, err := startManagedStream(
+			m.ctx,
+			m.Config.RequestTimeout,
+			m.closeActiveStream,
+			func(cancel context.CancelFunc) { m.activeCancel = cancel },
+			func(st stream.Stream) { m.activeStream = st },
+			func(ctx context.Context) (agent.StreamStart, error) {
+				return m.startStreamFn(ctx, content)
+			},
+		)
 		if err != nil {
-			m.closeActiveStream()
-			var e errs.Error
-			if errors.As(err, &e) {
-				return e
-			}
-			return errs.Error{Err: err}
+			return streamStartErrorMsg(err)
 		}
-		m.activeStream = res.Stream
 		m.messages = res.Messages
 		mod := res.Model
 
-		cfg := m.Config
-		if len(cfg.Stop) > 0 && !cfg.Quiet && !m.stopWarned {
-			fmt.Fprintln(os.Stderr, m.Styles.Comment.Render("Warning: stop sequences are currently ignored by the Fantasy bridge (current Fantasy Call API has no stop field)."))
-			m.stopWarned = true
-		}
-		if !cfg.Quiet && !cfg.MCPAllowNonTTY && !present.IsInputTTY() && len(cfg.MCPServers) > 0 && !m.mcpNonTTYWarned {
-			fmt.Fprintln(os.Stderr, m.Styles.Comment.Render("Warning: MCP tools are disabled for piped/non-interactive input by default. Use --mcp-allow-non-tty to enable."))
-			m.mcpNonTTYWarned = true
-		}
+		warnIgnoredStop(m.Config.Stop, m.Config.Quiet, &m.stopWarned, m.emitWarning)
+		warnMCPDisabledForNonTTY(m.Config, &m.mcpNonTTYWarned, m.emitWarning)
 
-		return m.receiveCompletionStreamCmd(completionOutput{
-			stream: res.Stream,
-			errh: func(err error) tea.Msg {
-				return m.handleStreamError(err, mod, m.Input)
-			},
-		})()
+		return m.receiveCompletionStreamCmd(completionOutput{stream: res.Stream, errh: func(err error) tea.Msg {
+			return m.handleStreamError(err, mod, m.Input)
+		}})()
 	}
 }
 
 func (m *Yai) receiveCompletionStreamCmd(msg completionOutput) tea.Cmd {
-	return func() tea.Msg {
-		if msg.stream.Next() {
-			chunk, err := msg.stream.Current()
-			if err != nil && !errors.Is(err, stream.ErrNoContent) {
-				_ = msg.stream.Close()
-				return msg.errh(err)
-			}
-			return completionOutput{
-				content: chunk.Content,
-				stream:  msg.stream,
-				errh:    msg.errh,
-			}
-		}
-
-		// stream is done, check for errors
-		if err := msg.stream.Err(); err != nil {
-			m.closeActiveStream()
-			return msg.errh(err)
-		}
-
-		if !m.Config.Quiet {
-			for _, warning := range msg.stream.DrainWarnings() {
-				fmt.Fprintln(os.Stderr, m.Styles.Comment.Render("Warning: "+warning))
-			}
-		}
-
-		results := msg.stream.CallTools()
-		toolMsg := completionOutput{
-			stream: msg.stream,
-			errh:   msg.errh,
-		}
-		for _, call := range results {
-			toolMsg.content += call.String()
-		}
-		if len(results) == 0 {
-			m.messages = msg.stream.Messages()
-			m.closeActiveStream()
+	return receiveManagedStreamCmd(
+		msg.stream,
+		m.Config.Quiet,
+		m.emitWarning,
+		m.closeActiveStream,
+		msg.errh,
+		func(content string, st stream.Stream, errh func(error) tea.Msg) tea.Msg {
+			return completionOutput{content: content, stream: st, errh: errh}
+		},
+		func(messages []proto.Message) tea.Msg {
+			m.messages = messages
 			return completionOutput{errh: msg.errh}
-		}
-		return toolMsg
-	}
+		},
+	)
 }
 
 func (m *Yai) readStdinCmd() tea.Msg {
@@ -401,6 +359,10 @@ func (m *Yai) closeActiveStream() {
 	closeStream(m.activeStream, m.activeCancel)
 	m.activeStream = nil
 	m.activeCancel = nil
+}
+
+func (m *Yai) emitWarning(message string) {
+	emitCommentWarning(m.Styles.Comment.Render, message)
 }
 
 func (m *Yai) outputStringForRender() string {

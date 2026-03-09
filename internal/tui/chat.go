@@ -3,7 +3,6 @@ package tui
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -69,20 +68,22 @@ type Chat struct {
 	waitingSince    time.Time
 }
 
+type ChatOptions struct {
+	Context       context.Context
+	Renderer      *lipgloss.Renderer
+	Config        *config.Config
+	Agent         *agent.Service
+	StartStream   func(context.Context, []proto.Message, string) (agent.StreamStart, error)
+	History       []proto.Message
+	Save          SaveFn
+	InitialPrompt string
+}
+
 // NewChat creates the Bubble Tea model for interactive chat.
-func NewChat(
-	ctx context.Context,
-	r *lipgloss.Renderer,
-	cfg *config.Config,
-	agentSvc *agent.Service,
-	startStreamFn func(context.Context, []proto.Message, string) (agent.StreamStart, error),
-	history []proto.Message,
-	saveFn SaveFn,
-	initialPrompt string,
-) *Chat {
+func NewChat(opts ChatOptions) *Chat {
 	gr, _ := glamour.NewTermRenderer(
 		glamour.WithEnvironmentConfig(),
-		glamour.WithWordWrap(cfg.WordWrap),
+		glamour.WithWordWrap(opts.Config.WordWrap),
 	)
 
 	ti := textinput.New()
@@ -98,20 +99,20 @@ func NewChat(
 		input:         ti,
 		viewport:      vp,
 		glam:          gr,
-		renderer:      r,
-		styles:        present.MakeStyles(r),
-		agent:         agentSvc,
-		saveFn:        saveFn,
-		cfg:           cfg,
-		ctx:           ctx,
-		history:       history,
-		startStreamFn: startStreamFn,
-		initialPrompt: initialPrompt,
+		renderer:      opts.Renderer,
+		styles:        present.MakeStyles(opts.Renderer),
+		agent:         opts.Agent,
+		saveFn:        opts.Save,
+		cfg:           opts.Config,
+		ctx:           opts.Context,
+		history:       opts.History,
+		startStreamFn: opts.StartStream,
+		initialPrompt: opts.InitialPrompt,
 	}
 
 	// Pre-render existing history into historyBuf.
-	if len(history) > 0 {
-		for _, msg := range history {
+	if len(opts.History) > 0 {
+		for _, msg := range opts.History {
 			if msg.Role == proto.RoleSystem || msg.Content == "" {
 				continue
 			}
@@ -335,108 +336,50 @@ func (c *Chat) startStreamCmd(prompt string) tea.Cmd {
 		if c.startStreamFn == nil {
 			return errs.Error{Reason: "Stream starter is not available"}
 		}
-		c.closeActiveStream()
 
-		ctx := c.ctx
-		if c.cfg.RequestTimeout > 0 {
-			cctx, cancel := context.WithTimeout(c.ctx, c.cfg.RequestTimeout)
-			ctx = cctx
-			c.activeCancel = cancel
-		}
-
-		res, err := c.startStreamFn(ctx, c.history, prompt)
+		res, err := startManagedStream(
+			c.ctx,
+			c.cfg.RequestTimeout,
+			c.closeActiveStream,
+			func(cancel context.CancelFunc) { c.activeCancel = cancel },
+			func(st stream.Stream) { c.activeStream = st },
+			func(ctx context.Context) (agent.StreamStart, error) {
+				return c.startStreamFn(ctx, c.history, prompt)
+			},
+		)
 		if err != nil {
-			c.closeActiveStream()
-			var e errs.Error
-			if errors.As(err, &e) {
-				return e
-			}
-			return errs.Error{Err: err}
+			return streamStartErrorMsg(err)
 		}
-
-		c.activeStream = res.Stream
 		mod := res.Model
 
-		if len(c.cfg.Stop) > 0 && !c.cfg.Quiet && !c.stopWarned {
-			fmt.Fprintln(os.Stderr, c.styles.Comment.Render("Warning: stop sequences are currently ignored by the Fantasy bridge."))
-			c.stopWarned = true
-		}
+		warnIgnoredStop(c.cfg.Stop, c.cfg.Quiet, &c.stopWarned, c.emitWarning)
 
-		return c.receiveStreamCmd(chatStreamChunkMsg{
-			stream: res.Stream,
-			errh: func(err error) tea.Msg {
-				return c.handleStreamError(err, mod, prompt)
-			},
-		})()
+		return c.receiveStreamCmd(chatStreamChunkMsg{stream: res.Stream, errh: func(err error) tea.Msg {
+			return c.handleStreamError(err, mod, prompt)
+		}})()
 	}
 }
 
 func (c *Chat) receiveStreamCmd(msg chatStreamChunkMsg) tea.Cmd {
-	return func() tea.Msg {
-		if msg.stream.Next() {
-			chunk, err := msg.stream.Current()
-			if err != nil && !errors.Is(err, stream.ErrNoContent) {
-				_ = msg.stream.Close()
-				return msg.errh(err)
-			}
-			return chatStreamChunkMsg{
-				content: chunk.Content,
-				stream:  msg.stream,
-				errh:    msg.errh,
-			}
-		}
-
-		if err := msg.stream.Err(); err != nil {
-			c.closeActiveStream()
-			return msg.errh(err)
-		}
-
-		if !c.cfg.Quiet {
-			for _, warning := range msg.stream.DrainWarnings() {
-				fmt.Fprintln(os.Stderr, c.styles.Comment.Render("Warning: "+warning))
-			}
-		}
-
-		results := msg.stream.CallTools()
-		if len(results) > 0 {
-			toolMsg := chatStreamChunkMsg{
-				stream: msg.stream,
-				errh:   msg.errh,
-			}
-			for _, call := range results {
-				toolMsg.content += call.String()
-			}
-			return toolMsg
-		}
-
-		messages := msg.stream.Messages()
-		c.closeActiveStream()
-		return chatStreamDoneMsg{messages: messages}
-	}
+	return receiveManagedStreamCmd(
+		msg.stream,
+		c.cfg.Quiet,
+		c.emitWarning,
+		c.closeActiveStream,
+		msg.errh,
+		func(content string, st stream.Stream, errh func(error) tea.Msg) tea.Msg {
+			return chatStreamChunkMsg{content: content, stream: st, errh: errh}
+		},
+		func(messages []proto.Message) tea.Msg {
+			return chatStreamDoneMsg{messages: messages}
+		},
+	)
 }
 
 func (c *Chat) handleStreamError(err error, mod config.Model, prompt string) tea.Msg {
-	action := c.agent.ActionForStreamError(err, mod, prompt, c.cfg.NoLimit)
-	if action.ModelOverride != "" {
-		c.cfg.Model = action.ModelOverride
-	}
-
-	if action.Retry {
-		next := action.Prompt
-		if next == "" {
-			next = prompt
-		}
-		return c.retry(action.Err, next)
-	}
-
-	var e errs.Error
-	if errors.As(err, &e) {
-		return e
-	}
-	if action.Err.Err == nil {
-		return errs.Error{Err: err}
-	}
-	return action.Err
+	return handleRetryableStreamError(c.agent, c.cfg.NoLimit, func(model string) {
+		c.cfg.Model = model
+	}, c.retry, err, mod, prompt)
 }
 
 func (c *Chat) retry(err errs.Error, content string) tea.Msg {
@@ -475,6 +418,10 @@ func (c *Chat) closeActiveStream() {
 	closeStream(c.activeStream, c.activeCancel)
 	c.activeStream = nil
 	c.activeCancel = nil
+}
+
+func (c *Chat) emitWarning(message string) {
+	emitCommentWarning(c.styles.Comment.Render, message)
 }
 
 func (c *Chat) refreshViewport() {
