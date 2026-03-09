@@ -139,11 +139,9 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 		return "", fmt.Errorf("mcp: %w", err)
 	}
 
-	var args map[string]any
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &args); err != nil {
-			return "", fmt.Errorf("mcp: %w: %s", err, string(data))
-		}
+	args, err := decodeToolArgs(data)
+	if err != nil {
+		return "", err
 	}
 
 	request := mcp.CallToolRequest{}
@@ -153,12 +151,30 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 	if err != nil {
 		return "", fmt.Errorf("mcp: %w", err)
 	}
+	out := renderToolResult(result.Content)
+	if result.IsError {
+		return "", errors.New(out)
+	}
+	return out, nil
+}
 
-	const maxToolResultBytes = 128 * 1024
-	const truncMsg = "\n\n[output truncated at 128 KiB]"
+const maxToolResultBytes = 128 * 1024
+const toolResultTruncMsg = "\n\n[output truncated at 128 KiB]"
 
+func decodeToolArgs(data []byte) (map[string]any, error) {
+	var args map[string]any
+	if len(data) == 0 {
+		return args, nil
+	}
+	if err := json.Unmarshal(data, &args); err != nil {
+		return nil, fmt.Errorf("mcp: %w: %s", err, string(data))
+	}
+	return args, nil
+}
+
+func renderToolResult(contents []mcp.Content) string {
 	var sb strings.Builder
-	for _, content := range result.Content {
+	for _, content := range contents {
 		if sb.Len() >= maxToolResultBytes {
 			break
 		}
@@ -176,7 +192,7 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 					truncated = truncated[:len(truncated)-1]
 				}
 				sb.WriteString(truncated)
-				sb.WriteString(truncMsg)
+				sb.WriteString(toolResultTruncMsg)
 			} else {
 				sb.WriteString(content.Text)
 			}
@@ -184,11 +200,7 @@ func (s *Service) CallTool(ctx context.Context, fullName string, data []byte) (s
 			sb.WriteString("[Non-text content]")
 		}
 	}
-
-	if result.IsError {
-		return "", errors.New(sb.String())
-	}
-	return sb.String(), nil
+	return sb.String()
 }
 
 // initClient creates and initializes an MCP client for the given server config.
