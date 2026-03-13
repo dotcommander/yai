@@ -15,11 +15,14 @@ import (
 var _ stream.Client = &Client{}
 
 const (
-	apiAnthropic = "anthropic"
-	apiGoogle    = "google"
-	apiOpenAI    = "openai"
-	apiAzure     = "azure"
-	apiAzureAD   = "azure-ad"
+	apiAnthropic  = "anthropic"
+	apiGoogle     = "google"
+	apiOpenAI     = "openai"
+	apiAzure      = "azure"
+	apiAzureAD    = "azure-ad"
+	apiOpenRouter = "openrouter"
+	apiVercel     = "vercel"
+	apiBedrock    = "bedrock"
 )
 
 // Config represents provider configuration used by the fantasy bridge.
