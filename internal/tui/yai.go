@@ -134,55 +134,10 @@ func (m *Yai) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	switch msg := msg.(type) {
 	case completionInput:
-		if msg.content != "" {
-			m.Input = present.RemoveWhitespace(msg.content)
-		}
-		if m.Input == "" && m.Config.Prefix == "" {
-			return m, m.quit
-		}
-
-		if m.Config.IncludePromptArgs {
-			m.appendToOutput(m.Config.Prefix + "\n\n")
-		}
-
-		if m.Config.IncludePrompt > 0 {
-			parts := strings.Split(m.Input, "\n")
-			if len(parts) > m.Config.IncludePrompt {
-				parts = parts[0:m.Config.IncludePrompt]
-			}
-			m.appendToOutput(strings.Join(parts, "\n") + "\n")
-		}
-		m.state = requestState
-		cmds = append(cmds, m.startCompletionCmd(msg.content))
+		return m.handleCompletionInput(msg)
 
 	case completionOutput:
-		if msg.stream == nil {
-			m.Output = m.outputBuf.String()
-			if !present.IsOutputTTY() || m.Config.Raw {
-				m.flushBufferedContent()
-			}
-			if m.shouldRenderFormattedOutput() && m.dirtyOutput {
-				m.renderFormattedOutput()
-			}
-			m.state = doneState
-			return m, m.quit
-		}
-		if msg.content != "" {
-			if m.state == requestState && !m.streamStartedAt.IsZero() && !m.Config.Quiet {
-				ttft := time.Since(m.streamStartedAt)
-				fmt.Fprintln(os.Stderr, m.Styles.Comment.Render(fmt.Sprintf(ttftFormat, ttft.Milliseconds())))
-			}
-			m.appendToOutput(msg.content)
-			m.state = responseState
-			if m.shouldRenderFormattedOutput() && m.dirtyOutput && !m.renderScheduled {
-				m.renderScheduled = true
-				cmds = append(cmds, m.renderOutputCmd())
-			}
-		}
-		cmds = append(cmds, m.receiveCompletionStreamCmd(completionOutput{
-			stream: msg.stream,
-			errh:   msg.errh,
-		}))
+		return m.handleCompletionOutput(msg)
 
 	case renderOutputMsg:
 		m.renderScheduled = false
@@ -232,6 +187,62 @@ func (m *Yai) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m *Yai) handleCompletionInput(msg completionInput) (tea.Model, tea.Cmd) {
+	if msg.content != "" {
+		m.Input = present.RemoveWhitespace(msg.content)
+	}
+	if m.Input == "" && m.Config.Prefix == "" {
+		return m, m.quit
+	}
+
+	if m.Config.IncludePromptArgs {
+		m.appendToOutput(m.Config.Prefix + "\n\n")
+	}
+
+	if m.Config.IncludePrompt > 0 {
+		parts := strings.Split(m.Input, "\n")
+		if len(parts) > m.Config.IncludePrompt {
+			parts = parts[0:m.Config.IncludePrompt]
+		}
+		m.appendToOutput(strings.Join(parts, "\n") + "\n")
+	}
+	m.state = requestState
+	return m, m.startCompletionCmd(msg.content)
+}
+
+func (m *Yai) handleCompletionOutput(msg completionOutput) (tea.Model, tea.Cmd) {
+	if msg.stream == nil {
+		m.Output = m.outputBuf.String()
+		if !present.IsOutputTTY() || m.Config.Raw {
+			m.flushBufferedContent()
+		}
+		if m.shouldRenderFormattedOutput() && m.dirtyOutput {
+			m.renderFormattedOutput()
+		}
+		m.state = doneState
+		return m, m.quit
+	}
+
+	var cmds []tea.Cmd
+	if msg.content != "" {
+		if m.state == requestState && !m.streamStartedAt.IsZero() && !m.Config.Quiet {
+			ttft := time.Since(m.streamStartedAt)
+			fmt.Fprintln(os.Stderr, m.Styles.Comment.Render(fmt.Sprintf(ttftFormat, ttft.Milliseconds())))
+		}
+		m.appendToOutput(msg.content)
+		m.state = responseState
+		if m.shouldRenderFormattedOutput() && m.dirtyOutput && !m.renderScheduled {
+			m.renderScheduled = true
+			cmds = append(cmds, m.renderOutputCmd())
+		}
+	}
+	cmds = append(cmds, m.receiveCompletionStreamCmd(completionOutput{
+		stream: msg.stream,
+		errh:   msg.errh,
+	}))
+	return m, tea.Batch(cmds...)
+}
+
 func (m Yai) viewportNeeded() bool {
 	return m.glamHeight > m.height
 }
@@ -274,12 +285,9 @@ func (m *Yai) quit() tea.Msg {
 }
 
 func (m *Yai) retry(content string, err errs.Error) tea.Msg {
-	m.retries++
-	if m.retries >= m.Config.MaxRetries {
-		return err
-	}
-	waitForRetryDelay(m.ctx, m.retries, err.Err)
-	return completionInput{content}
+	return retryOrFail(m.ctx, &m.retries, m.Config.MaxRetries, err, content, func(s string) tea.Msg {
+		return completionInput{s}
+	})
 }
 
 func (m *Yai) startCompletionCmd(content string) tea.Cmd {

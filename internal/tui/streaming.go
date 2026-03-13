@@ -141,3 +141,19 @@ func warnMCPDisabledForNonTTY(cfg *config.Config, warned *bool, emitWarning func
 func emitCommentWarning(commentRenderer func(...string) string, message string) {
 	fmt.Fprintln(os.Stderr, commentRenderer("Warning: "+message))
 }
+
+func retryOrFail(
+	ctx context.Context,
+	retries *int,
+	maxRetries int,
+	err errs.Error,
+	content string,
+	submit func(string) tea.Msg,
+) tea.Msg {
+	*retries++
+	if *retries >= maxRetries {
+		return err
+	}
+	waitForRetryDelay(ctx, *retries, err.Err)
+	return submit(content)
+}

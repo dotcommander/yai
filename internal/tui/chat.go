@@ -183,78 +183,18 @@ func (c *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return c, nil
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c":
-			if c.state == chatStreamState {
-				c.closeActiveStream()
-				c.waitingSince = time.Time{}
-				c.finishTurn()
-				c.state = chatInputState
-				c.resizeViewport()
-				return c, nil
-			}
-			return c, tea.Quit
-		case "enter":
-			if c.state != chatInputState {
-				break
-			}
-			text := strings.TrimSpace(c.input.Value())
-			if text == "" {
-				return c, nil
-			}
-			if text == "/exit" || text == "/quit" {
-				return c, tea.Quit
-			}
-			c.input.SetValue("")
-			return c, func() tea.Msg {
-				return chatSubmitMsg{prompt: text}
-			}
+		if model, cmd, handled := c.handleKeyMsg(msg); handled {
+			return model, cmd
 		}
 
 	case chatSubmitMsg:
-		c.retries = 0
-		fmt.Fprintf(&c.historyBuf, "> %s\n\n", msg.prompt)
-		c.streamBuf.Reset()
-		c.waitingSince = time.Now()
-		c.state = chatStreamState
-		c.resizeViewport()
-		c.dirtyOutput = true
-		c.refreshViewport()
-		return c, tea.Batch(c.startStreamCmd(msg.prompt), c.waitingTickCmd())
+		return c.handleSubmit(msg)
 
 	case chatStreamChunkMsg:
-		if msg.stream == nil {
-			// Stream complete.
-			return c, nil
-		}
-		if msg.content != "" {
-			if !c.waitingSince.IsZero() && c.streamBuf.Len() == 0 && !c.cfg.Quiet {
-				ttft := time.Since(c.waitingSince)
-				fmt.Fprintln(os.Stderr, c.styles.Comment.Render(fmt.Sprintf(ttftFormat, ttft.Milliseconds())))
-			}
-			c.waitingSince = time.Time{}
-			c.streamBuf.WriteString(msg.content)
-			c.resizeViewport()
-			c.dirtyOutput = true
-			if !c.renderScheduled {
-				c.renderScheduled = true
-				cmds = append(cmds, c.renderTickCmd())
-			}
-		}
-		cmds = append(cmds, c.receiveStreamCmd(chatStreamChunkMsg{
-			stream: msg.stream,
-			errh:   msg.errh,
-		}))
-		return c, tea.Batch(cmds...)
+		return c.handleStreamChunk(msg)
 
 	case chatStreamDoneMsg:
-		c.history = msg.messages
-		c.waitingSince = time.Time{}
-		c.finishTurn()
-		c.state = chatInputState
-		c.resizeViewport()
-		c.refreshViewport()
-		return c, nil
+		return c.handleStreamDone(msg)
 
 	case chatWaitingTickMsg:
 		if c.state == chatStreamState && c.streamBuf.Len() == 0 {
@@ -297,6 +237,86 @@ func (c *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	return c, tea.Batch(cmds...)
+}
+
+func (c *Chat) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch msg.String() {
+	case "ctrl+c":
+		if c.state == chatStreamState {
+			c.closeActiveStream()
+			c.waitingSince = time.Time{}
+			c.finishTurn()
+			c.state = chatInputState
+			c.resizeViewport()
+			return c, nil, true
+		}
+		return c, tea.Quit, true
+	case "enter":
+		if c.state != chatInputState {
+			return c, nil, false
+		}
+		text := strings.TrimSpace(c.input.Value())
+		if text == "" {
+			return c, nil, true
+		}
+		if text == "/exit" || text == "/quit" {
+			return c, tea.Quit, true
+		}
+		c.input.SetValue("")
+		return c, func() tea.Msg {
+			return chatSubmitMsg{prompt: text}
+		}, true
+	}
+	return c, nil, false
+}
+
+func (c *Chat) handleSubmit(msg chatSubmitMsg) (tea.Model, tea.Cmd) {
+	c.retries = 0
+	fmt.Fprintf(&c.historyBuf, "> %s\n\n", msg.prompt)
+	c.streamBuf.Reset()
+	c.waitingSince = time.Now()
+	c.state = chatStreamState
+	c.resizeViewport()
+	c.dirtyOutput = true
+	c.refreshViewport()
+	return c, tea.Batch(c.startStreamCmd(msg.prompt), c.waitingTickCmd())
+}
+
+func (c *Chat) handleStreamChunk(msg chatStreamChunkMsg) (tea.Model, tea.Cmd) {
+	if msg.stream == nil {
+		return c, nil
+	}
+
+	var cmds []tea.Cmd
+	if msg.content != "" {
+		if !c.waitingSince.IsZero() && c.streamBuf.Len() == 0 && !c.cfg.Quiet {
+			ttft := time.Since(c.waitingSince)
+			fmt.Fprintln(os.Stderr, c.styles.Comment.Render(fmt.Sprintf(ttftFormat, ttft.Milliseconds())))
+		}
+		c.waitingSince = time.Time{}
+		c.streamBuf.WriteString(msg.content)
+		c.resizeViewport()
+		c.dirtyOutput = true
+		if !c.renderScheduled {
+			c.renderScheduled = true
+			cmds = append(cmds, c.renderTickCmd())
+		}
+	}
+	cmds = append(cmds, c.receiveStreamCmd(chatStreamChunkMsg{
+		stream: msg.stream,
+		errh:   msg.errh,
+	}))
+	return c, tea.Batch(cmds...)
+}
+
+func (c *Chat) handleStreamDone(msg chatStreamDoneMsg) (tea.Model, tea.Cmd) {
+	c.history = msg.messages
+	c.waitingSince = time.Time{}
+	c.finishTurn()
+	c.state = chatInputState
+	c.resizeViewport()
+	c.refreshViewport()
+	return c, nil
 }
 
 // View implements tea.Model.
@@ -383,12 +403,9 @@ func (c *Chat) handleStreamError(err error, mod config.Model, prompt string) tea
 }
 
 func (c *Chat) retry(err errs.Error, content string) tea.Msg {
-	c.retries++
-	if c.retries >= c.cfg.MaxRetries {
-		return err
-	}
-	waitForRetryDelay(c.ctx, c.retries, err.Err)
-	return chatSubmitMsg{prompt: content}
+	return retryOrFail(c.ctx, &c.retries, c.cfg.MaxRetries, err, content, func(s string) tea.Msg {
+		return chatSubmitMsg{prompt: s}
+	})
 }
 
 func (c *Chat) finishTurn() {
