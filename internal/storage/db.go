@@ -266,31 +266,53 @@ func resolveStoreDir(ds string) (dir string, cleanupDir string, err error) {
 	return ds, "", nil
 }
 
-func (c *DB) load() error {
+// withFileLock acquires the file-level lock for the duration of fn.
+// If no lock is configured (e.g. :memory: stores), fn runs directly.
+func (c *DB) withFileLock(fn func() error) error {
 	if c.lock != nil {
 		if err := c.lock.Lock(); err != nil {
-			return fmt.Errorf("could not lock index file: %w", err)
+			return fmt.Errorf("lock index: %w", err)
 		}
 		defer func() { _ = c.lock.Unlock() }()
 	}
+	return fn()
+}
 
-	file, err := os.Open(c.indexPath)
+func (c *DB) load() error {
+	return c.withFileLock(func() error {
+		return c.loadLocked()
+	})
+}
+
+func (c *DB) loadLocked() error {
+	lines, err := readIndexLines(c.indexPath)
+	if err != nil {
+		return err
+	}
+	c.applyLines(lines)
+	return nil
+}
+
+// readIndexLines reads a JSONL index file and returns trimmed, non-empty lines.
+// It is resilient to index corruption:
+//   - skip overlong lines without bricking the whole history
+//   - tolerate partial writes (the index is append-only and compacted)
+//
+// Returns a nil slice (not an error) when the file does not exist.
+func readIndexLines(path string) ([][]byte, error) {
+	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("could not open index file: %w", err)
+		return nil, fmt.Errorf("could not open index file: %w", err)
 	}
 	defer file.Close() //nolint:errcheck
 
-	// Be resilient to index corruption:
-	// - skip malformed lines (including a truncated tail entry)
-	// - skip overlong lines without bricking the whole history
-	// The index is append-only and compacted, so tolerating partial writes is
-	// preferable to failing startup.
 	const maxIndexLineBytes = 10 * 1024 * 1024
 	reader := bufio.NewReaderSize(file, 64*1024)
 
+	var lines [][]byte
 	for {
 		line, err := reader.ReadSlice('\n')
 		if errors.Is(err, bufio.ErrBufferFull) {
@@ -304,7 +326,7 @@ func (c *DB) load() error {
 			continue
 		}
 		if err != nil && !errors.Is(err, io.EOF) {
-			return fmt.Errorf("could not read index file: %w", err)
+			return nil, fmt.Errorf("could not read index file: %w", err)
 		}
 		if len(line) == 0 && errors.Is(err, io.EOF) {
 			break
@@ -324,28 +346,33 @@ func (c *DB) load() error {
 			continue
 		}
 
-		var evt convoEvent
-		if uerr := json.Unmarshal(trimmed, &evt); uerr != nil {
-			// Truncated tail entries are common in crashy environments.
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			continue
-		}
-		if aerr := c.applyEvent(&evt); aerr != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			continue
-		}
-		c.ops++
+		// Copy trimmed bytes — the reader buffer is reused on next iteration.
+		cp := make([]byte, len(trimmed))
+		copy(cp, trimmed)
+		lines = append(lines, cp)
 
 		if errors.Is(err, io.EOF) {
 			break
 		}
 	}
 
-	return nil
+	return lines, nil
+}
+
+// applyLines unmarshals JSONL event lines and applies them to the in-memory
+// conversation map. Lines that fail to unmarshal or apply are silently skipped,
+// matching the corruption-tolerant semantics of the index format.
+func (c *DB) applyLines(lines [][]byte) {
+	for _, line := range lines {
+		var evt convoEvent
+		if err := json.Unmarshal(line, &evt); err != nil {
+			continue
+		}
+		if err := c.applyEvent(&evt); err != nil {
+			continue
+		}
+		c.ops++
+	}
 }
 
 func (c *DB) applyEvent(evt *convoEvent) error {
@@ -371,34 +398,29 @@ func (c *DB) applyEvent(evt *convoEvent) error {
 }
 
 func (c *DB) appendEventLocked(evt convoEvent) error {
-	if c.lock != nil {
-		if err := c.lock.Lock(); err != nil {
-			return fmt.Errorf("lock index: %w", err)
+	return c.withFileLock(func() error {
+		file, err := os.OpenFile(c.indexPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("open index: %w", err)
 		}
-		defer func() { _ = c.lock.Unlock() }()
-	}
+		defer func() { _ = file.Close() }()
 
-	file, err := os.OpenFile(c.indexPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return fmt.Errorf("open index: %w", err)
-	}
-	defer func() { _ = file.Close() }()
+		bts, err := json.Marshal(evt)
+		if err != nil {
+			return fmt.Errorf("marshal index event: %w", err)
+		}
+		bts = append(bts, '\n')
+		if _, err := file.Write(bts); err != nil {
+			_ = file.Close()
+			return fmt.Errorf("write index event: %w", err)
+		}
+		if err := file.Sync(); err != nil {
+			return fmt.Errorf("sync index: %w", err)
+		}
 
-	bts, err := json.Marshal(evt)
-	if err != nil {
-		return fmt.Errorf("marshal index event: %w", err)
-	}
-	bts = append(bts, '\n')
-	if _, err := file.Write(bts); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("write index event: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("sync index: %w", err)
-	}
-
-	c.ops++
-	return nil
+		c.ops++
+		return nil
+	})
 }
 
 func (c *DB) compactIfNeededLocked() error {
@@ -412,13 +434,12 @@ func (c *DB) compactIfNeededLocked() error {
 }
 
 func (c *DB) compactLocked() error {
-	if c.lock != nil {
-		if err := c.lock.Lock(); err != nil {
-			return fmt.Errorf("lock index: %w", err)
-		}
-		defer func() { _ = c.lock.Unlock() }()
-	}
+	return c.withFileLock(func() error {
+		return c.compactIndexLocked()
+	})
+}
 
+func (c *DB) compactIndexLocked() error {
 	items := make([]Conversation, 0, len(c.conversations))
 	for _, convo := range c.conversations {
 		items = append(items, convo)

@@ -201,30 +201,17 @@ func Ensure() (Config, error) {
 		return c, errs.Wrap(dirErr, "Could not create cache directory.")
 	}
 
-	if dirErr := WriteConfigFile(sp); dirErr != nil {
-		return c, dirErr
-	}
-	content, err := os.ReadFile(sp)
-	if err != nil {
-		return c, errs.Wrap(err, "Could not read settings file.")
-	}
-	dec := yaml.NewDecoder(bytes.NewReader(content))
-	dec.KnownFields(true)
-	if err := dec.Decode(&c); err != nil {
-		return c, errs.Wrap(err, "Could not parse settings file.")
+	if err := loadAndParse(sp, &c); err != nil {
+		return c, err
 	}
 
-	if err := env.ParseWithOptions(&c, env.Options{Prefix: "YAI_"}); err != nil {
-		return c, errs.Wrap(err, "Could not parse environment into settings file.")
-	}
+	applyDefaults(&c, home)
 
-	if err := MergeRolesFromDir(&c); err != nil {
-		return c, errs.Wrap(err, "Could not load roles from roles directory.")
-	}
-	RegisterBuiltinRoles(&c)
-
-	if c.CachePath == "" {
-		c.CachePath = filepath.Join(home, ".config", "yai", "history")
+	// request-timeout:
+	// - 0 means use default
+	// - negative means disable (handled by callers by only applying when > 0)
+	if c.RequestTimeout < 0 && !c.Quiet {
+		fmt.Fprintln(os.Stderr, "Note: request-timeout is negative; request timeout is disabled.")
 	}
 
 	if err := os.MkdirAll(
@@ -234,14 +221,48 @@ func Ensure() (Config, error) {
 		return c, errs.Wrap(err, "Could not create cache directory.")
 	}
 
+	return c, nil
+}
+
+// loadAndParse reads the config file, decodes YAML, applies environment
+// overrides, and merges role definitions.
+func loadAndParse(sp string, c *Config) error {
+	if err := WriteConfigFile(sp); err != nil {
+		return err
+	}
+	content, err := os.ReadFile(sp)
+	if err != nil {
+		return errs.Wrap(err, "Could not read settings file.")
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(content))
+	dec.KnownFields(true)
+	if err := dec.Decode(c); err != nil {
+		return errs.Wrap(err, "Could not parse settings file.")
+	}
+
+	if err := env.ParseWithOptions(c, env.Options{Prefix: "YAI_"}); err != nil {
+		return errs.Wrap(err, "Could not parse environment into settings file.")
+	}
+
+	if err := MergeRolesFromDir(c); err != nil {
+		return errs.Wrap(err, "Could not load roles from roles directory.")
+	}
+	RegisterBuiltinRoles(c)
+
+	return nil
+}
+
+// applyDefaults fills zero-value fields with sensible defaults.
+func applyDefaults(c *Config, home string) {
+	if c.CachePath == "" {
+		c.CachePath = filepath.Join(home, ".config", "yai", "history")
+	}
 	if c.MaxOutputBytes == 0 {
 		c.MaxOutputBytes = 2 * 1024 * 1024
 	}
-
 	if c.WordWrap == 0 {
 		c.WordWrap = 80
 	}
-
 	if c.FormatText == nil {
 		c.FormatText = Default().FormatText
 	}
@@ -251,17 +272,9 @@ func Ensure() (Config, error) {
 	if c.MCPTimeout == 0 {
 		c.MCPTimeout = Default().MCPTimeout
 	}
-	// request-timeout:
-	// - 0 means use default
-	// - negative means disable (handled by callers by only applying when > 0)
-	if c.RequestTimeout < 0 && !c.Quiet {
-		fmt.Fprintln(os.Stderr, "Note: request-timeout is negative; request timeout is disabled.")
-	}
 	if c.RequestTimeout == 0 {
 		c.RequestTimeout = Default().RequestTimeout
 	}
-
-	return c, nil
 }
 
 // MergeRolesFromDir merges role definitions from ~/.config/yai/roles into cfg.
