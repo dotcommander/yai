@@ -99,7 +99,7 @@ func (rt *runtime) runGenerate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	store, err := rt.prepareGenerateSession()
+	store, err := rt.openAndPlanStore()
 	if err != nil {
 		return err
 	}
@@ -220,7 +220,7 @@ func (rt *runtime) maybeAskForPromptInfo() error {
 	return nil
 }
 
-func (rt *runtime) prepareGenerateSession() (*conversationStore, error) {
+func (rt *runtime) openAndPlanStore() (*conversationStore, error) {
 	store, err := openConversationStore(rt.cfg.CachePath)
 	if err != nil {
 		return nil, errs.Wrap(err, "Could not open conversation store.")
@@ -245,7 +245,7 @@ func (rt *runtime) runGenerateProgram(
 	store *conversationStore,
 ) (*tui.Yai, error) {
 	agentSvc := agent.New(&rt.cfg, store.Cache, nil)
-	startStreamFn := makePromptStreamStarter(&rt.cfg, store.Cache, agentSvc)
+	startStreamFn := agentSvc.Stream
 	yai := tui.NewYai(ctx, present.StderrRenderer(), &rt.cfg, agentSvc, startStreamFn)
 	p := tea.NewProgram(yai, opts...)
 	m, err := p.Run()
