@@ -106,7 +106,7 @@ The `internal/proto` package defines the shared `Message`, `Request`, `Chunk`, a
 - Non-retryable provider errors now also prefer Fantasy `ErrorTitleForStatusCode(...)` for user-facing reason text.
 - Unauthorized (401) provider errors now also flow through Fantasy status-title mapping (no custom invalid-key branch).
 - Retry wait timing now uses Fantasy `RetryWithExponentialBackoffRespectingRetryHeaders` (single-step) for provider errors so `retry-after` headers are honored.
-- Current `charm.land/fantasy` version is v0.11.0; provider set is `anthropic`, `azure`, `bedrock`, `google`, `openai`, `openaicompat`, `openrouter`, `vercel`; `cohere` and `ollama` use `openaicompat` routing.
+- Current `charm.land/fantasy` version is v0.12.2; provider set is `anthropic`, `azure`, `bedrock`, `google`, `openai`, `openaicompat`, `openrouter`, `vercel`; `cohere` and `ollama` use `openaicompat` routing.
 - Version is injected via ldflags (`-X main.Version`, `-X main.CommitSHA`) in CI/release builds. Local `go build` derives version from Go's embedded VCS info (git tag + commit + dirty state). The fallback chain is: ldflags → `debug.ReadBuildInfo().Main.Version` → `dev-<sha>[-dirty]`.
 - Local dev binary is symlinked: `$GOBIN/yai` (or `$HOME/go/bin/yai`) → `<project-root>/yai`. After `go build -o ./yai .`, the PATH binary is updated automatically.
 - User runs yai in Ghostty; prioritize terminal-compatibility for chat UI behavior (stable footer, predictable redraw/scroll behavior).
